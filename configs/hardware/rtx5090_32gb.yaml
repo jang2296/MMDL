@@ -1,0 +1,11 @@
+name: rtx5090_32gb
+placement: gpu_only
+gpu_index: 0
+expected_vram_gib: 32
+gpu_weight_cap_gib: 28.0
+gpu_reserve_gib: 3.0
+cpu_weight_cap_gib: 12.0
+cpu_available_fraction: 0.65
+min_free_gpu_gib: 12.0
+allow_disk_offload: false
+num_workers: 0

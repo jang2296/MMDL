@@ -33,7 +33,7 @@ class ReproduceTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     arguments(["--job-id", "fixture", "--commit", "a" * 40] + extra)
 
-    def test_origin_and_profile_are_currently_team_and_rtx4090_only(self):
+    def test_origin_and_profile_are_currently_team_and_approved_gpu_only(self):
         for origin in (
             "https://github.com/jang2296/MMDL",
             "https://github.com/jang2296/MMDL.git",
@@ -46,6 +46,7 @@ class ReproduceTests(unittest.TestCase):
                 _validate_origin(origin)
         hardware_root = Path(__file__).resolve().parents[2] / "configs/hardware"
         _validate_hardware_profile(hardware_root / "rtx4090_24gb.yaml")
+        _validate_hardware_profile(hardware_root / "rtx5090_32gb.yaml")
         with self.assertRaises(ValueError):
             _validate_hardware_profile(hardware_root / "rtx5060_8gb.yaml")
 
@@ -65,6 +66,7 @@ class ReproduceTests(unittest.TestCase):
                     _validate_doctor_gpu(report)
             for gpu in (
                 {"name": "NVIDIA GeForce RTX 4080", "memory_total_bytes": 24 * 1024**3},
+                {"name": "NVIDIA GeForce RTX 5090", "memory_total_bytes": 32 * 1024**3},
                 {"name": "NVIDIA GeForce RTX 4090", "memory_total_bytes": 22 * 1024**3},
                 {"name": "NVIDIA GeForce RTX 4090", "memory_total_bytes": float("nan")},
             ):
@@ -72,6 +74,21 @@ class ReproduceTests(unittest.TestCase):
                 report.write_text(json.dumps(payload))
                 with self.subTest(gpu=gpu), self.assertRaises(RuntimeError):
                     _validate_doctor_gpu(report)
+
+    def test_doctor_requires_selected_rtx5090_with_31_gib(self):
+        with tempfile.TemporaryDirectory() as temp:
+            report = Path(temp) / "doctor.json"
+            payload = {"environment": {"torch": {"gpus": [{
+                "name": "NVIDIA RTX 5090",
+                "memory_total_bytes": 31 * 1024**3,
+            }]}}}
+            report.write_text(json.dumps(payload))
+            hardware = Path(__file__).resolve().parents[2] / "configs/hardware/rtx5090_32gb.yaml"
+            _validate_doctor_gpu(report, hardware)
+            payload["environment"]["torch"]["gpus"][0]["name"] = "NVIDIA GeForce RTX 4090"
+            report.write_text(json.dumps(payload))
+            with self.assertRaises(RuntimeError):
+                _validate_doctor_gpu(report, hardware)
 
     def test_resume_uses_new_log_after_interrupted_stage(self):
         with tempfile.TemporaryDirectory() as temp:

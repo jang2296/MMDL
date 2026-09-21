@@ -55,16 +55,24 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
    증거: 외부 setup/data-coverage.json, setup/data-check.log.
 5. 공통 protocol: 로컬30+구조3 검증 후 FROZEN. 변경은 상태 표기뿐이며 생성/이미지/P0/채점은 동일하다.
    2,048 token 상한은 실측된 잘림 제한을 명시한 팀 예산이다. 충분한 길이나 공식 지정값으로 주장하지 않는다.
-   GitHub commit: 준비 중. feat/mmmu-baseline, 아직 commit/push 없음.
-   공개 대상 78개 파일을 명시적으로 stage했고 실제 index bytes의 비밀키/개인경로/크기 검사 PASS.
+   GitHub feature 게시 완료: `13b44e4c0f768d84f8c4d153b323371ff7168217`.
+   원격 refs/heads/feat/mmmu-baseline의 SHA 일치 확인. 실제 RunPod 실행 SHA는 이후 수정 시 다시 고정한다.
+   공개 대상 86개 파일의 실제 index bytes 비밀키/개인경로/크기 검사 PASS.
    개인 .serena 설정과 별도 방법론 문서는 제외·보존했다. 자체 코드의 whitespace 검사 PASS;
    vendored 공식 소스의 기존 공백 경고는 원본 hash 보존을 위해 수정하지 않았다.
-   origin fetch=팀 HTTPS / push=동일 팀 SSH. GitHub 공개 저장소는 비어 있음을 확인했다.
+   origin fetch=팀 HTTPS / push=동일 팀 SSH. 초기 빈 저장소의 feature 브랜치에 첫 게시를 완료했다.
    기존 SSH 인증에서 jang2296 계정 확인. 별도 GitHub 플러그인 설치는 필요하지 않다.
    공개키에 대응하는 기존 RSA 키로 비대화형 인증 성공, 비밀키 권한 0600 확인.
    Pod에는 공개키만 전달하며 실제 Pod SSH/SCP 연결은 대여 후 검증해야 한다.
 6. RunPod A/B: 각각 NOT_STARTED. 실제 4090 검증·회수·cleanup도 미실행.
    계정 조회 Pod 0 / Network Volume 0. 유료 자원을 만들지 않았다.
+   Community 4090 생성 요청 2회가 실제 재고 부족 HTTP400으로 거절됐다(전체 위치, 표시된 EU-RO-1).
+   재고 API의 LOW 표시와 실제 배정 가능 여부는 다르다. 동일 조건의 무근거 재시도는 하지 않는다.
+   목표가 허용한 동급 이상 단일 GPU 대안으로 5090 32GB의 명시적 hardware/doctor guard를 추가했다.
+   CPU 단위검사 41개·Ruff·mypy·shell syntax PASS. 평가 조건 변경이나 추가 로컬 추론은 없다.
+   현재 표시 단가 community $0.69/h. container30GB+volume60GB 포함 보수적 $0.703/h,
+   운영 최대7.5시간/약$5.273, 회수·복구 여유 약$1.527. 총 상한$6.80은 변경하지 않는다.
+   실제 생성 단가가 다르면 운영 시간을 낮추고, 생성된 정확한 ID에 외부 STOP 감시를 연결한다.
 7. 무료 준비: Accounting30 종료·사후 검증 후 외부 setup/runpod-prep.DK1IeD의
    검증된 19개 파일을 원본에 통합했다. A/B role·Git SHA·개별 추론 호출 기록·공유 이미지,
    과목별 시간·안전한 bundle/로컬 receipt와 clean-clone 재현 명령이 포함된다.
@@ -133,6 +141,7 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
 1. Accounting30 종료·사후 검사 완료. 원본 결과 보존, 재추론하지 않음.
 2. 격리 준비본 통합·CPU 검사·주관식/다중 이미지 3개 검증 완료. 추가 로컬 추론 없음.
    build_messages가 run_dir/prompts 사본을 쓰는 보완도 포함하며 P0는 바꾸지 않는다.
-3. 공개 검사·고정 commit·실단가 기반 최대시간·회수/삭제 gate 준비. 총 USD 6.80을 넘기지 않는다.
+3. 5090 명시적 프로필/실제 장비 guard 검사 → 새 고정 commit 게시 → 단일 Pod 배정·독립 STOP 감시.
+   기존 실행 commit의 깨끗한 별도 local worktree를 보관했다. 최종 bundle 검증에는 실제 실행 SHA의 worktree를 쓴다.
 4. 준비가 모두 끝나면 한 Pod에서 doctor·최소 smoke·A900→B900·검증/포장/회수/삭제.
 전체 protocol은 FROZEN이다. A/B·로컬 회수·보고서·CLEANUP_VERIFIED는 아직 달성하지 않았다.

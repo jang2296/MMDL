@@ -17,7 +17,10 @@ from mmdl.runtime.artifacts import git_commit, read_json, sha256_file, write_jso
 TEAM_ORIGIN = re.compile(
     r"(?:https://github\.com/jang2296/MMDL|git@github\.com:jang2296/MMDL)(?:\.git)?"
 )
-MIN_4090_VRAM_BYTES = 23 * 1024**3
+HARDWARE_PROFILES = {
+    "rtx4090_24gb.yaml": (r"NVIDIA(?: GeForce)? RTX 4090", 23 * 1024**3),
+    "rtx5090_32gb.yaml": (r"NVIDIA(?: GeForce)? RTX 5090", 31 * 1024**3),
+}
 
 
 def arguments(argv=None):
@@ -77,23 +80,27 @@ def _validate_origin(origin):
 
 
 def _validate_hardware_profile(hardware):
-    if Path(hardware).name != "rtx4090_24gb.yaml":
-        raise ValueError("Only the approved rtx4090_24gb hardware profile is allowed")
+    profile = Path(hardware).name
+    if profile not in HARDWARE_PROFILES:
+        raise ValueError("Only the approved RTX 4090 or RTX 5090 hardware profile is allowed")
+    return profile
 
 
-def _validate_doctor_gpu(report_path):
+def _validate_doctor_gpu(report_path, hardware="rtx4090_24gb.yaml"):
+    profile = _validate_hardware_profile(hardware)
+    name_pattern, min_vram = HARDWARE_PROFILES[profile]
     report = read_json(report_path)
     gpus = report.get("environment", {}).get("torch", {}).get("gpus")
     if not isinstance(gpus, list) or len(gpus) != 1:
         raise RuntimeError("RunPod suite requires exactly one visible GPU")
     gpu = gpus[0]
     name = gpu.get("name", "") if isinstance(gpu, dict) else ""
-    if not re.fullmatch(r"NVIDIA(?: GeForce)? RTX 4090", str(name).strip(), re.IGNORECASE):
-        raise RuntimeError("RunPod suite requires an NVIDIA RTX 4090")
+    if not re.fullmatch(name_pattern, str(name).strip(), re.IGNORECASE):
+        raise RuntimeError(f"RunPod suite requires the GPU for {profile}")
     total = gpu.get("memory_total_bytes") if isinstance(gpu, dict) else None
     if (not isinstance(total, (int, float)) or isinstance(total, bool)
-            or not math.isfinite(total) or total < MIN_4090_VRAM_BYTES):
-        raise RuntimeError("RunPod RTX 4090 must report at least 23 GiB of VRAM")
+            or not math.isfinite(total) or total < min_vram):
+        raise RuntimeError(f"RunPod {profile} reports insufficient VRAM")
 
 
 def _open_stage_log(directory, job_id, completed_stages, label):
@@ -166,7 +173,7 @@ def execute(args, root):
         stage("doctor", ["bash", "scripts/doctor.sh", "--output", artifacts / "jobs" / f"{args.job_id}.doctor.json",
                           "--storage-path", paths["HF_HOME"], "--storage-path", data,
                           "--storage-path", artifacts, "--required-gib", "28"])
-        _validate_doctor_gpu(artifacts / "jobs" / f"{args.job_id}.doctor.json")
+        _validate_doctor_gpu(artifacts / "jobs" / f"{args.job_id}.doctor.json", args.hardware)
         stage("download", [python, "-m", "mmdl.data.download", "--data-root", paths["MMDL_DATA_ROOT"],
                             "--cache", paths["HF_HOME"], "--artifact-root", artifacts, "--skip-pro"])
         common = ["bash", "scripts/eval.sh", "--protocol", args.protocol, "--hardware", args.hardware,

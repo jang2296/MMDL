@@ -111,9 +111,15 @@ smoke 통과 후 공통 protocol을 동결하고 검사된 feature commit을 게
 RunPod에는 로컬 코드/venv/모델/cache/결과를 복사하지 않는다. 아래 경로는 현재
 코드·CPU 검사 대상이며 **실제 RunPod clean-clone/4090/A900/B900 검증은 아직 미실행**이다.
 
+4090 재고가 없을 때 사용할 명시적 대안은 `configs/hardware/rtx5090_32gb.yaml`이다.
+5090도 같은 BF16/P0/generation/parser/batch 1/SDPA math를 사용하며 CPU offload하지 않는다.
+기본값은 계속 4090이다. 아래 `reproduce.sh` 실행·재개에
+`--hardware configs/hardware/rtx5090_32gb.yaml`을 추가해야 5090 프로필을 선택한다.
+선택한 프로필과 실제 단일 GPU 이름·VRAM이 다르면 중단한다. 5090 실측 검증은 아직 미실행이다.
+
 배포 전 총 예산·GPU/디스크 실단가·회수 여유를 포함한 최대시간과 독립적인 STOP
 watchdog을 정한다. 승인된 전체 예산을 job manifest에 기록하며 승인 없는 초과,
-자동 충전·추가 Pod·고가 GPU 전환은 금지한다. 기본은 4090 한 대와 작업 전용 Pod volume,
+자동 충전·추가 Pod·승인 범위를 벗어난 GPU 전환은 금지한다. 기본은 단일 GPU와 작업 전용 Pod volume,
 별도 Network Volume은 생성하지 않는다. 아래 watchdog 값은 실제 외부 감시를 가동한
 제어측의 기록이어야 하며 임의 문자열로 gate를 통과시키면 안 된다. 재현 스크립트는
 Pod를 생성하거나 과금을 중지하지 않으므로, 프로세스 종료를 Pod stop으로 간주하지 않는다.
