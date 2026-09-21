@@ -63,16 +63,27 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
    origin fetch=팀 HTTPS / push=동일 팀 SSH. 초기 빈 저장소의 feature 브랜치에 첫 게시를 완료했다.
    기존 SSH 인증에서 jang2296 계정 확인. 별도 GitHub 플러그인 설치는 필요하지 않다.
    공개키에 대응하는 기존 RSA 키로 비대화형 인증 성공, 비밀키 권한 0600 확인.
-   Pod에는 공개키만 전달하며 실제 Pod SSH/SCP 연결은 대여 후 검증해야 한다.
-6. RunPod A/B: 각각 NOT_STARTED. 실제 4090 검증·회수·cleanup도 미실행.
-   계정 조회 Pod 0 / Network Volume 0. 유료 자원을 만들지 않았다.
-   Community 4090 생성 요청 2회가 실제 재고 부족 HTTP400으로 거절됐다(전체 위치, 표시된 EU-RO-1).
+   Pod에는 공개키만 전달했다. 실제 SSH 실행·파일 쓰기·SCP 회수와 파일 해시 검증을 완료했다.
+6. RunPod A/B: 각각 NOT_STARTED. 실행 SHA `08e00ca802bb25f6915464df1f29ceb17b7eaa7e` 게시 확인.
+   작업 전 Pod 0 / Network Volume 0. 5090 전용 Pod `0l1rrpy7m41lkq` 생성 성공(2026-09-21 19:12 UTC).
+   Network Volume 없음. 60GB Pod volume/30GB container. 실제 GPU 단가 $0.69/h.
+   독립 STOP watchdog을 먼저 가동했다. CUDA 진단 실패 후 조기 STOP/EXITED 확인, 감시 해제.
+   SSH·SCP용 직접 TCP 포트 연결과 실제 5090 32607MiB/driver580.178.04/Python3.12.3,
+   /workspace 영구 XFS mount 60GiB 확인. GitHub exact SHA 직접 clone·격리 lock 설치·pip check 성공.
+   doctor는 CUDA 초기화 오류로 실패했다. 직접 libcuda cuInit(0)=999, /dev/nvidia-uvm open=EIO(5).
+   CUDA control/GPU 장치는 열렸고 libcuda와 kernel driver 버전은 일치한다. 호스트 UVM 계층 장애이며
+   정확한 커널 원인은 미확정이다. wheel/모델/평가 조건을 바꾸지 않았고 원격 추론은 0회다.
+   진단/설치 로그 9개 SCP 회수·원격/로컬 SHA256 전부 일치. 외부 recovery/<job>-<pod>/에 보존.
+   모델·benchmark 다운로드 전 실패였으므로 900개 결과는 없다. 진단 회수를 FULL LOCAL_VERIFIED로 쓰지 않는다.
+   유일한 진단 사본이 로컬 검증된 뒤 장애 Pod를 삭제했다. 2026-09-21 19:27 UTC 조회:
+   계정 Pod 0 / Network Volume 0. 실패한 준비 작업의 자원 정리만 완료; 전체 평가 완료는 아니다.
+   Community 4090 생성 요청 2회와 교체용 EU-RO-1 5090 요청 1회가 재고 부족 HTTP400으로 거절됐다.
+   재고 부족 총3회로 사용자 지정 재시도 상한에 도달했다. 재고/호스트 상태 변경 또는 새 지시 전 추가 대여 중단.
    재고 API의 LOW 표시와 실제 배정 가능 여부는 다르다. 동일 조건의 무근거 재시도는 하지 않는다.
    목표가 허용한 동급 이상 단일 GPU 대안으로 5090 32GB의 명시적 hardware/doctor guard를 추가했다.
    CPU 단위검사 41개·Ruff·mypy·shell syntax PASS. 평가 조건 변경이나 추가 로컬 추론은 없다.
-   현재 표시 단가 community $0.69/h. container30GB+volume60GB 포함 보수적 $0.703/h,
-   운영 최대7.5시간/약$5.273, 회수·복구 여유 약$1.527. 총 상한$6.80은 변경하지 않는다.
-   실제 생성 단가가 다르면 운영 시간을 낮추고, 생성된 정확한 ID에 외부 STOP 감시를 연결한다.
+   원래 운영 상한7.5시간 전에 중단했다. 과금 API는 아직 해당 사용내역을 반환하지 않으므로 비용0으로 쓰지 않는다.
+   총 상한$6.80은 유지하며 재개 시 이미 사용한 비용·보존비·회수 여유를 먼저 차감한다.
 7. 무료 준비: Accounting30 종료·사후 검증 후 외부 setup/runpod-prep.DK1IeD의
    검증된 19개 파일을 원본에 통합했다. A/B role·Git SHA·개별 추론 호출 기록·공유 이미지,
    과목별 시간·안전한 bundle/로컬 receipt와 clean-clone 재현 명령이 포함된다.
@@ -141,7 +152,12 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
 1. Accounting30 종료·사후 검사 완료. 원본 결과 보존, 재추론하지 않음.
 2. 격리 준비본 통합·CPU 검사·주관식/다중 이미지 3개 검증 완료. 추가 로컬 추론 없음.
    build_messages가 run_dir/prompts 사본을 쓰는 보완도 포함하며 P0는 바꾸지 않는다.
-3. 5090 명시적 프로필/실제 장비 guard 검사 → 새 고정 commit 게시 → 단일 Pod 배정·독립 STOP 감시.
+3. 5090 명시적 프로필/장비 guard CPU 검사·고정 commit 게시·clean clone/설치 완료; 호스트 CUDA 실패.
    기존 실행 commit의 깨끗한 별도 local worktree를 보관했다. 최종 bundle 검증에는 실제 실행 SHA의 worktree를 쓴다.
-4. 준비가 모두 끝나면 한 Pod에서 doctor·최소 smoke·A900→B900·검증/포장/회수/삭제.
-전체 protocol은 FROZEN이다. A/B·로컬 회수·보고서·CLEANUP_VERIFIED는 아직 달성하지 않았다.
+4. 재고/호스트 상태 변경 또는 새 지시 후만 재시도. 대여 직후 libcuda cuInit/UVM 열기부터 확인하여 설치 낭비를 막는다.
+   삭제된 Pod는 --resume하지 않는다. 정상 새 Pod/남은 예산/독립 watchdog을 확인한 뒤 README의 clone 명령을
+   MMDL_CODE_COMMIT=08e00ca802bb25f6915464df1f29ceb17b7eaa7e,
+   MMDL_JOB_ID=mmdl-val-20260922-retry 및 --hardware configs/hardware/rtx5090_32gb.yaml로 실행한다.
+   doctor·최소 smoke·A900→B900·검증/포장/회수/삭제가 남았다.
+전체 protocol은 FROZEN이다. 상태는 PROVIDER_BLOCKED/NO_ACTIVE_PAID_RESOURCES.
+A/B·전체 결과 로컬 회수·실측 보고서·최종 CLEANUP_VERIFIED는 아직 달성하지 않았다.
