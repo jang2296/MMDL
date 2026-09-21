@@ -1,0 +1,3 @@
+{hint_prefix}Question: {question}
+Options:
+{options}Please select the correct answer from the options above.

@@ -1,0 +1,28 @@
+{
+  "mode": "smoke",
+  "status": "SMOKE",
+  "expected_count": 1,
+  "completed_count": 1,
+  "missing_count": 0,
+  "missing_ids": [],
+  "external_failure_count": 0,
+  "unresolved_failure_count": 0,
+  "correct": 1,
+  "denominator": 1,
+  "accuracy": 1.0,
+  "macro_average": null,
+  "subject_scores": [
+    {
+      "subject": "Accounting",
+      "correct": 1,
+      "total": 1,
+      "accuracy": 1.0
+    }
+  ],
+  "evaluation_seconds_this_invocation": 1237.5745422789987,
+  "model_load_seconds": 2.4636503250003443,
+  "total_seconds_this_invocation": 1260.610293288999,
+  "peak_ram_rss_bytes": 11315146752,
+  "peak_vram_allocated_bytes": 5399902720,
+  "peak_vram_reserved_bytes": 5460983808
+}

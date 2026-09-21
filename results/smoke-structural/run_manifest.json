@@ -1,0 +1,104 @@
+{
+  "identity": {
+    "model_sha256": "717925bc86dcc72db4068cda59e05ba1139e1e35355ed0772420e2b5816d2044",
+    "protocol_sha256": "5aa2d5779ffce9b7c4ab173b6cc84c0ffc684add6330f34fd298e8cd56ee4932",
+    "code_sha256": "1d1f17daa60fe6dc103ebc7247148dde0828d29ea82be53cb3913754a477e0bf",
+    "environment_sha256": "b2abd7e2346509cb1a96b3c947ad414342eab16d23d66e3532ba94a86ce5fc44",
+    "hardware": {
+      "name": "rtx5060_8gb",
+      "placement": "cpu_offload",
+      "gpu_index": 0,
+      "expected_vram_gib": 8,
+      "gpu_weight_cap_gib": 5.5,
+      "gpu_reserve_gib": 2.0,
+      "cpu_weight_cap_gib": 12.0,
+      "cpu_available_fraction": 0.65,
+      "min_free_gpu_gib": 3.0,
+      "allow_disk_offload": false,
+      "num_workers": 0
+    },
+    "ids_sha256": "63858fcdc597a4cffef8a48aeaa9413524aa5ee6efc8ac4f5b87d835a0782cd3",
+    "mode": "partial",
+    "git_commit": null,
+    "job_id": null,
+    "run_role": "standalone"
+  },
+  "external_root": "MMDL_ARTIFACT_ROOT/runs/smoke-structural",
+  "external_files": [
+    {
+      "path": "backend.json",
+      "bytes": 5108,
+      "sha256": "6695777422831afdab5070ae2e9c6e103007ef0f187bc5700354fbf6daab5227"
+    },
+    {
+      "path": "code_files.json",
+      "bytes": 4722,
+      "sha256": "2918937c6396132ce93fb02689ed10fef640745dc7bb53221c204afb0973def7"
+    },
+    {
+      "path": "command.json",
+      "bytes": 842,
+      "sha256": "85cf52c990e3ba9e46354ca77c73e52a6849da64dfcc11503872b565f1f8d095"
+    },
+    {
+      "path": "coverage.json",
+      "bytes": 30060,
+      "sha256": "107d1d0aec80b638420fd566f9677481a940dd8508b297cd10ab5e91cf0eacea"
+    },
+    {
+      "path": "environment.json",
+      "bytes": 1488,
+      "sha256": "5627f202157cc27c748ed513589007e77140afed889f980aae9b97200de97c22"
+    },
+    {
+      "path": "failures.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "locations.json",
+      "bytes": 193,
+      "sha256": "8926e31f2ecd3b160f2f682c2aed24b46a726103aaa16e28363763273fa1e91d"
+    },
+    {
+      "path": "predictions.jsonl",
+      "bytes": 50623,
+      "sha256": "6545cea5a4e606590f9d51890f99169dabeebebbedcb7e236e024bd196e90663"
+    },
+    {
+      "path": "resolved_eval_config.yaml",
+      "bytes": 1253,
+      "sha256": "c3426f5fef4c59de2c1b19bfe38dbd38ee8ac2e7fed92121282ff42846c61a17"
+    },
+    {
+      "path": "resolved_hardware_config.yaml",
+      "bytes": 237,
+      "sha256": "60307e360dcde627dc7685b6d5a13bcd86bcf19a11e624b7bbf2ad77b594792c"
+    },
+    {
+      "path": "review.html",
+      "bytes": 93496,
+      "sha256": "a6b2b48c9f8b17291de72aedc2ed0006d267abf4dfc9ad55f881ad60e497c821"
+    },
+    {
+      "path": "run_manifest.json",
+      "bytes": 1060,
+      "sha256": "6dd986e0d4b5d04de22cacaefd432cc655c23dba8cc8d15645f59241d482611b"
+    },
+    {
+      "path": "source.patch",
+      "bytes": 176963,
+      "sha256": "b028026a61d5eb28a6fc000fa8a7617d5f4ac625402c0c53920b71e5a642c26a"
+    },
+    {
+      "path": "subject_scores.csv",
+      "bytes": 247,
+      "sha256": "835be8ab19b137ed2b629a63efffdac027c626374c88fb74f4c250f69153212c"
+    },
+    {
+      "path": "summary.json",
+      "bytes": 1319,
+      "sha256": "8b4609b4cdf376b09f6d894dec271b3a9dcff1336b44dd1612d2659192b8044d"
+    }
+  ]
+}

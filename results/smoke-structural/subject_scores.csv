@@ -1,0 +1,4 @@
+subject,correct,total,accuracy,generation_seconds,sample_seconds
+Architecture_and_Engineering,0,1,0.0,1183.3604099629883,1183.482821351994
+Biology,0,1,0.0,269.91554675699444,270.06458980499883
+Music,0,1,0.0,273.7646675769938,274.4190938399988
