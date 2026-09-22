@@ -14,7 +14,16 @@ RunPod 단일 `mmmu-val` evaluation 900 추론 → 로컬 회수·검증 → 전
 - 기존 `assignment`/`analysis`의 원본 run ID·commit·hash를 보존한다. 이미 실행 중인 continuous32k 결과는 COMPLETE900·독립 재채점·무결성 검증 후 그대로 제출과 실패 검토에 쓸 수 있다.
 - legacy 재개는 원래 commit에서만 한다. 보고서 생성 코드 commit과 실제 추론 commit은 다를 수 있으며 이를 숨기지 않는다.
 - CPU 76 tests, Ruff, mypy 22 source files, Bash syntax, 단일평가 dry-run 통과. 새 이름의 GPU900은 재실행하지 않았다.
-- 사용자는 먼저 완료되는 Pod를 로컬 회수·검증 후 삭제하도록 승인했다. 14:14 UTC 기존2048 launcher만 SIGSTOP 상태로 확인했고, 현재 evaluator는 그대로 실행 중이다. 이는 불필요한 후속900 차단이며 현재 평가 중단이 아니다. 회수·삭제 완료는 아직 주장하지 않는다.
+- 사용자는 먼저 완료되는 Pod를 로컬 회수·검증 후 삭제하도록 승인했다. 14:14 UTC 기존2048 launcher만 SIGSTOP하여 불필요한 후속900을 차단했고, 당시 evaluator는 그대로 완료시켰다.
+
+### 기존 2,048-token 결과 회수·Pod 삭제 완료
+
+- 기존 `mmdl-val-20260922-3090-assignment`는 900/900, 30과목×30개, 정답 427개, 미해결 시스템 오류 0으로 완료됐다. 이는 2,048-token reference의 결과이며 canonical 32k 성적표에 섞지 않는다.
+- 실제 추론 commit은 `af961a36b2471e978e96efd7347e150cb0bbce00`이다. 같은 commit의 로컬 checkout에서 900개 고유 ID·원문 재채점·입력/레코드/코드 해시·PNG 959개 디코딩·HTML 이미지 링크·과목별 산술을 독립 검증했다.
+- 2026-09-22 14:36:02 UTC 로컬 검증 완료. 저장 위치는 `$MMDL_ARTIFACT_ROOT/recovered/baseline-2048-complete-20260922/`이며, `results.tar.gz`, `extracted/artifacts/`, `recovery_receipt.json`을 보존한다.
+- 압축 파일은 332,612,462 bytes(317.20 MiB), 원본 artifact 1,927개는 376,203,674 bytes(358.78 MiB)다. archive SHA-256은 `11cba0dff07a228c7ee70332f3b10859b66894a9349687507017c5072a3444e6`이다. 모델 가중치·전체 HF cache·venv는 포함하지 않는다.
+- 14:36:23 UTC 전용 Pod `2j4knzy36jtzmv` 삭제 API 204, 이후 조회 404 및 Pod 목록 부재를 확인했다. Pod의 60 GB 작업 디스크는 삭제되었고 결과는 로컬에 보존된다. 별도 Network Volume은 없었다. 새 `vf8wla9q5v9gm8`는 RUNNING으로 유지했다.
+- 원래 A/B job metadata는 변경하지 않았다. 두 번째 full900을 실행하지 않았으므로 원래 paired bundle 전체를 검증했다고 하지 않고, 단일 완료 run의 별도 recovery manifest/receipt로 회수 증거를 남겼다.
 
 아래의 A/B 순서·대기 상태는 당시 실행 기록이다. 별도 B900을 시작하라는 현재 지시가 아니며 위 단일평가·회수 승인으로 대체되었다.
 

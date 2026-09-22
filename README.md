@@ -104,7 +104,7 @@ python scripts/check_submission.py
 `python scripts/check_submission.py --staged`로 **index의 실제 내용**을 검사한다.
 가중치·cache·venv·강의 원본·전체 응답·이미지는 게시하지 않는다.
 
-## RunPod: GitHub 고정 commit에서 두 번의 실제 추론
+## RunPod: GitHub 고정 commit에서 단일 평가
 
 팀 저장소는 `https://github.com/jang2296/MMDL.git`이다. 로컬 30문제와 필요한 구조별
 smoke 통과 후 공통 protocol을 동결하고 검사된 feature commit을 게시한다.
@@ -119,7 +119,8 @@ RunPod에는 로컬 코드/venv/모델/cache/결과를 복사하지 않는다. �
 하드웨어 프로필은 BF16/P0/generation/parser를 바꾸지 않으며 CPU offload하지 않는다.
 batch/backend/kernel은 아래 명시적 평가 protocol에서 선택하고 하드웨어 profile로 덮어쓰지 않는다.
 선택한 프로필과 실제 단일 GPU 이름·VRAM이 다르면 중단한다. 대여 직후 CUDA 초기화,
-설치 후 실제 BF16 연산을 확인하며 3090의 전체 평가 성공을 아직 주장하지 않는다.
+설치 후 실제 BF16 연산을 확인한다. 기존 2,048-token 3090 실행은 900개 완료·로컬 검증·
+회수 후 Pod를 삭제했다. 이는 진행 중인 canonical 32k 평가의 완료를 뜻하지 않는다.
 
 기본 strict 정책에서는 배포 전 총 예산·GPU/디스크 실단가·회수 여유를 포함한 최대시간과 독립적인 STOP
 watchdog을 정한다. 승인된 전체 예산을 job manifest에 기록하며 승인 없는 초과,
