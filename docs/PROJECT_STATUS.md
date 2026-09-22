@@ -3,8 +3,43 @@
 2026-09-21. 새 요청: 로컬 30문제 검증 → 팀 GitHub 고정 commit의 clean clone →
 RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 → 전용 자원 삭제.
 제출 점수는 A만 사용한다. 로컬900·학습·증강·MMMU test/Pro 추론·심층 분석은 금지한다.
-팀 저장소는 `https://github.com/jang2296/MMDL`, 총 RunPod 비용 상한은 USD 6.80이다.
+팀 저장소는 `https://github.com/jang2296/MMDL`, 최초 총 RunPod 비용 상한은 USD 6.80이었다.
+현재 상한 철회는 아래 최신 승인 기록을 따른다.
 대여 직전 GPU+storage 실단가에서 회수/복구 여유를 제외한 최대시간을 계산·기록한다.
+
+## 최신 실행 전환 — continuous scheduling (2026-09-22)
+
+사용자 승인에 따라 기존 reference Pod는 유지하고, 새 분석 Pod의 partial 결과를 보존한 뒤
+일시 중지하여 장문 생성 원인을 점검했다. 새 분석 run은 70/900, 시스템 실패 0으로 보존되었고
+그 중 61개는 EOS, 9개는 `finish_reason=length`(각 32,768 token)였다. 9개가 전체 생성
+399,758 token의 294,912 token(73.77%)을 차지했다. 예시 장문은 Architecture_and_Engineering
+1에서 반복 문장이 약335회, 15에서 동일 유형 문장이 약79회 관측되었으나, 이는 원인 가설의
+근거이지 모델 일반 동작의 증명은 아니다. 새 분석 Pod는 삭제하지 않고 중지/보존 상태다.
+
+새 protocol 설정은 `configs/eval/mmmu_val_continuous_vllm_v1.yaml`의
+`mmmu-val-fast-vllm-32k-continuous-v1`이다. vLLM 0.11.0 `LLMEngine.add_request()`/`step()`으로
+최대 2개 request를 유지하고, 하나가 끝나면 최종 row를 즉시 저장한 뒤 다음 독립 문제를 refill한다.
+`async_scheduling=false`, eager, BF16, P0, seed/image/parser, 출력 상한 32,768은 유지한다.
+고정 batch protocol `mmmu-val-fast-vllm-32k-v1`은 역사 기록으로 보존하며 결과를 섞지 않는다.
+continuous protocol은 실제 GPU 검증 전이다. CPU 검사·GitHub 게시 후 새 Pod를 생성하여
+GPU smoke를 먼저 통과한 다음 분석 900문제를 실행한다.
+
+이번 새 배포에 한해 사용자가 비용을 더 지불할 수 있다고 명시적으로 승인하여
+`MMDL_COST_POLICY=user_waived` opt-in을 사용한다. 이는 결제/자동충전 변경이나 비용 0을
+의미하지 않으며, storage reserve·실제 단가·자원 식별·회수/정리 기록은 계속 요구한다.
+기본 strict 비용 정책은 유지한다. 이번 두 Pod의 기존 비용 제한 watchdog은 사용자 상한
+철회에 따라 해제했으며, 새 배포도 자동 중지 예산을 임의로 만들어 기록하지 않는다.
+
+새 continuous engine의 CPU mock 검사는 완료 row를 다음 request보다 먼저 보존하고,
+완료 순서가 입력 순서와 달라도 기록하며, 후속 오류가 앞선 완료 결과를 지우지 않는지 통과했다.
+Accounting_1, Agriculture_1, Biology_29의 새 3문제 GPU smoke는 아직 실행 전이며, 모두
+`max_new_tokens=32768` protocol로 실행해야 한다.
+
+연속 실행의 `generation_seconds`는 각 engine `step()` wall time을 당시 active request 수로
+나눈 attribution 값이고, 실제 요청 지연은 `request_latency_seconds`로 별도 기록한다.
+따라서 request 시간 합을 전체 elapsed time으로 해석하지 않으며, throughput은 engine invocation
+wall time으로 산출한다. 32,768은 Qwen 공식 MMMU 평가 source의 `out_seq_length` 값이며,
+모델 card의 VL 16,384와 다른 평가 recipe 값이다. 어떤 설정도 자동으로 낮추지 않는다.
 
 ## 2026-09-22 가속 전환 — 진행 중
 

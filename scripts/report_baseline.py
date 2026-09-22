@@ -17,7 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 OFFICIAL_SCORE = 67.4
-FINAL_PROTOCOL_ID = "mmmu-val-fast-vllm-32k-v1"
+FINAL_PROTOCOL_ID = "mmmu-val-fast-vllm-32k-continuous-v1"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -39,8 +39,9 @@ def _validate_final_protocol(cfg: dict[str, Any]) -> None:
     if (cfg.get("protocol_id") != FINAL_PROTOCOL_ID
             or cfg.get("generation", {}).get("max_new_tokens") != 32768
             or execution.get("backend") != "vllm"
-            or execution.get("batch_size") != 2):
-        raise ValueError("Assignment report accepts only the frozen 32k vLLM submission protocol")
+            or execution.get("batch_size") != 2
+            or execution.get("scheduling") != "continuous"):
+        raise ValueError("Assignment report accepts only the frozen continuous 32k vLLM submission protocol")
 
 
 def _config_path(run_dir: Path, manifest: dict[str, Any]) -> Path:

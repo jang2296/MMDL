@@ -46,6 +46,26 @@ class FastProtocolTests(unittest.TestCase):
                 validate_batch_outputs(requests, bad)
 
     def test_mocked_vllm_batch_runs_through_dispatch_save_and_finalize(self):
+        self._run_mocked_backend()
+
+    def test_continuous_completion_saved_before_next_request_is_prepared(self):
+        self._run_mocked_backend(continuous=True)
+
+    def test_continuous_failure_preserves_prior_completion_and_records_active_failures(self):
+        self._run_mocked_backend(continuous=True, fail_after_first=True)
+
+    def test_continuous_protocol_changes_scheduling_only(self):
+        old, hw = load_configs(ROOT / "configs/eval/mmmu_val_fast_vllm_v1.yaml",
+                              ROOT / "configs/hardware/rtx3090_24gb.yaml")
+        new, _ = load_configs(ROOT / "configs/eval/mmmu_val_continuous_vllm_v1.yaml",
+                             ROOT / "configs/hardware/rtx3090_24gb.yaml")
+        self.assertEqual(new, old | {"protocol_id": "mmmu-val-fast-vllm-32k-continuous-v1",
+                                     "execution": old["execution"] | {"scheduling": "continuous"}})
+        new["execution"]["batch_size"] = 3
+        with self.assertRaises(ValueError):
+            validate_configs(new, hw)
+
+    def _run_mocked_backend(self, continuous=False, fail_after_first=False):
         class Dataset(list):
             def __getitem__(self, key):
                 if key == "id":
@@ -65,6 +85,10 @@ class FastProtocolTests(unittest.TestCase):
             def generate_batch(self, requests):
                 self.test_case.assertEqual([r["sample_id"] for r in requests], [
                     "validation_Accounting_1", "validation_Accounting_2"])
+                return self.outputs(requests)
+
+            @staticmethod
+            def outputs(requests):
                 return [{"sample_id": request["sample_id"], "raw_response": "A",
                          "generated_token_ids": [1], "generated_tokens": 1, "input_tokens": 2,
                          "image_grid_thw": [[1, 1, 1]], "input_tensors": {"fixture": request["sample_id"]},
@@ -73,6 +97,21 @@ class FastProtocolTests(unittest.TestCase):
                          "peak_vram_allocated_bytes": None, "peak_vram_reserved_bytes": None,
                          "observed_device_memory_used_bytes": 123}
                         for request in requests]
+
+            def generate_stream(self, requests):
+                try:
+                    first, second = next(requests), next(requests)
+                    yield self.outputs([second])[0] | {"request_latency_seconds": 0.2}
+                    # A completed short request must be durable while the first is still active.
+                    self.test_case.assertTrue((artifacts / "runs/smoke-fast/samples/validation_Accounting_2.json").is_file())
+                    third = next(requests)
+                    if fail_after_first:
+                        raise RuntimeError("fixture worker failed after durable completion")
+                    yield self.outputs([third])[0] | {"request_latency_seconds": 0.3}
+                    yield self.outputs([first])[0] | {"request_latency_seconds": 0.8}
+                    self.test_case.assertIsNone(next(requests, None))
+                finally:
+                    self.test_case.stream_closed = True
 
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
@@ -86,15 +125,17 @@ class FastProtocolTests(unittest.TestCase):
                 "id": f"validation_Accounting_{index}", "question_type": "multiple-choice",
                 "question": f"fixture {index}", "options": ["yes", "no"], "answer": "A",
                 "explanation": None, "image_1": {"bytes": buffer.getvalue()},
-            } for index in (1, 2)])
-            cfg, hw = load_configs(ROOT / "configs/eval/mmmu_val_fast_vllm_v1.yaml",
+            } for index in ((1, 2, 3) if continuous else (1, 2))])
+            protocol = ROOT / ("configs/eval/mmmu_val_continuous_vllm_v1.yaml" if continuous
+                               else "configs/eval/mmmu_val_fast_vllm_v1.yaml")
+            cfg, hw = load_configs(protocol,
                                    ROOT / "configs/hardware/rtx3090_24gb.yaml")
             args = SimpleNamespace(
-                protocol=ROOT / "configs/eval/mmmu_val_fast_vllm_v1.yaml",
+                protocol=protocol,
                 require_commit="a" * 40, model_ref=ROOT / "manifests/models/baseline.json",
                 model_path=base / "model", base_path=base / "model", data_root=data,
                 artifact_root=artifacts, public_root=public, mode="smoke", subject=None, limit=None,
-                sample_id=["validation_Accounting_1", "validation_Accounting_2"], run_id="smoke-fast",
+                sample_id=rows["id"], run_id="smoke-fast",
                 resume=False, job_id="job", run_role="smoke",
             )
             environment = {
@@ -108,15 +149,27 @@ class FastProtocolTests(unittest.TestCase):
                     patch("mmdl.evaluation.engine.check_storage", return_value={"sufficient": True}), \
                     patch("mmdl.evaluation.engine.verify_model"), \
                     patch("mmdl.evaluation.engine.load_validation",
-                          return_value=({"Accounting": rows}, {"total": 2})), \
+                          return_value=({"Accounting": rows}, {"total": len(rows)})), \
                     patch("mmdl.evaluation.engine.code_records", return_value=[]), \
                     patch("mmdl.evaluation.backends.vllm_backend.VLLMBackend", Backend):
-                summary = run(args, cfg, hw, ROOT)
-            self.assertEqual(summary["status"], "SMOKE")
-            self.assertEqual(summary["completed_count"], 2)
+                if fail_after_first:
+                    with self.assertRaisesRegex(RuntimeError, "Run incomplete"):
+                        run(args, cfg, hw, ROOT)
+                    summary = read_json(artifacts / "runs/smoke-fast/summary.json")
+                else:
+                    summary = run(args, cfg, hw, ROOT)
+            self.assertEqual(summary["status"], "INCOMPLETE" if fail_after_first else "SMOKE")
+            self.assertEqual(summary["completed_count"], 1 if fail_after_first else len(rows))
             samples = artifacts / "runs/smoke-fast/samples"
-            self.assertEqual({read_json(path)["id"] for path in samples.glob("*.json")}, {
-                "validation_Accounting_1", "validation_Accounting_2"})
+            self.assertEqual({read_json(path)["id"] for path in samples.glob("*.json")},
+                             {"validation_Accounting_2"} if fail_after_first else set(rows["id"]))
+            if continuous:
+                self.assertTrue(self.stream_closed)
+                self.assertIn("overlapping request latency", summary["sample_timing_policy"])
+            if fail_after_first:
+                failed = artifacts / "runs/smoke-fast/external_failures"
+                self.assertEqual({read_json(path)["id"] for path in failed.glob("*.json")},
+                                 {"validation_Accounting_1", "validation_Accounting_3"})
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from mmdl.runtime.reproduce import (
     _validate_hardware_profile,
     _validate_origin,
     _smoke_sample_ids,
+    require_runtime,
     arguments,
     execute,
     main,
@@ -22,6 +23,45 @@ from mmdl.runtime.reproduce import (
 
 
 class ReproduceTests(unittest.TestCase):
+    def _runtime_env(self, **extra):
+        volume = Path(tempfile.mkdtemp())
+        root = volume / "checkout"
+        root.mkdir()
+        for name in ("HF_HOME", "MMDL_DATA_ROOT", "MMDL_ARTIFACT_ROOT", "MMDL_VENV_ROOT"):
+            (volume / name.lower()).mkdir()
+        values = {
+            "MMDL_VOLUME_ROOT": str(volume),
+            "HF_HOME": str(volume / "hf_home"),
+            "MMDL_DATA_ROOT": str(volume / "mmdl_data_root"),
+            "MMDL_ARTIFACT_ROOT": str(volume / "mmdl_artifact_root"),
+            "MMDL_VENV_ROOT": str(volume / "mmdl_venv_root"),
+            "MMDL_STORAGE_RESERVE_GIB": "10",
+            "RUNPOD_POD_ID": "pod-fixture",
+        }
+        values.update(extra)
+        return root, values
+
+    def test_default_cost_policy_rejects_missing_budget(self):
+        root, env = self._runtime_env()
+        with patch.dict("os.environ", env, clear=True), patch.object(Path, "is_mount", return_value=True), \
+                patch("mmdl.runtime.reproduce.shutil.disk_usage", return_value=SimpleNamespace(free=50 * 1024**3)):
+            with self.assertRaises(ValueError):
+                require_runtime(root)
+
+    def test_user_waived_cost_policy_is_explicit_and_returns_none(self):
+        root, env = self._runtime_env(MMDL_COST_POLICY="user_waived")
+        with patch.dict("os.environ", env, clear=True), patch.object(Path, "is_mount", return_value=True), \
+                patch("mmdl.runtime.reproduce.shutil.disk_usage", return_value=SimpleNamespace(free=50 * 1024**3)):
+            _, deadline, budget = require_runtime(root)
+        self.assertIsNone(deadline)
+        self.assertIsNone(budget)
+
+    def test_invalid_cost_policy_is_rejected(self):
+        root, env = self._runtime_env(MMDL_COST_POLICY="free_money")
+        with patch.dict("os.environ", env, clear=True), patch.object(Path, "is_mount", return_value=True), \
+                patch("mmdl.runtime.reproduce.shutil.disk_usage", return_value=SimpleNamespace(free=50 * 1024**3)):
+            with self.assertRaises(ValueError):
+                require_runtime(root)
     def test_gpu_samples_record_observed_whole_device_peak(self):
         with tempfile.TemporaryDirectory() as temp:
             samples = Path(temp) / "stage.log.gpu.csv"
@@ -54,6 +94,15 @@ class ReproduceTests(unittest.TestCase):
     def test_smoke_ids_match_backend_batch_policy(self):
         self.assertEqual(_smoke_sample_ids("transformers"), ["validation_Accounting_1"])
         self.assertEqual(_smoke_sample_ids("vllm"), ["validation_Accounting_1", "validation_Biology_29"])
+        with tempfile.TemporaryDirectory() as temp:
+            continuous = Path(temp) / "mmmu_val_continuous_vllm_v1.yaml"
+            continuous.write_text("execution:\n  scheduling: continuous\n")
+            self.assertEqual(_smoke_sample_ids("vllm", continuous),
+                             ["validation_Accounting_1", "validation_Biology_29", "validation_Agriculture_1"])
+            old_fast = Path(temp) / "mmmu_val_fast_vllm_v1.yaml"
+            old_fast.write_text("execution:\n  backend: vllm\n")
+            self.assertEqual(_smoke_sample_ids("vllm", old_fast),
+                             ["validation_Accounting_1", "validation_Biology_29"])
 
     def test_origin_and_profile_are_currently_team_and_approved_gpu_only(self):
         for origin in (

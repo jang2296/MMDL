@@ -87,3 +87,21 @@ Async scheduling and prefix caching are explicitly disabled; the
 [Qwen recipe](https://github.com/vllm-project/recipes/blob/main/Qwen/Qwen3-VL.md) warning about
 improved penalty compatibility in0.11.1 concerns async scheduling. Eager execution avoids graph
 capture startup/memory overhead for this short-lived batch2 job; actual throughput must be measured.
+
+## Continuous scheduling protocol (2026-09-22)
+
+The new `mmmu-val-fast-vllm-32k-continuous-v1` configuration keeps the fixed model,
+revision, BF16, P0 prompt, image bounds, sampling, parser, `max_new_tokens=32768`,
+`max_model_len=36864`, `async_scheduling=false`, and eager execution. It changes only
+request scheduling: the vLLM 0.11.0 [`LLMEngine` API](https://docs.vllm.ai/en/v0.11.0/api/vllm/v1/engine/llm_engine.html)
+is used through `add_request()` and `step()` with at most two active requests. When one
+request finishes, its final row is persisted and the next independent request is added
+to that slot. This is a team implementation choice enabled by the course's documented
+backend/batching freedom; it does not change benchmark inputs or the generation recipe.
+
+The protocol records `request_latency_seconds` separately from `generation_seconds`.
+The latter is an attribution metric that divides each `step()` wall time by the number
+of active requests at that step; it is not an additive elapsed-time measure. Throughput
+uses the actual engine-invocation wall time. The protocol is not GPU-validated yet, and
+the earlier fixed-batch `mmmu-val-fast-vllm-32k-v1` run remains historical rather than
+being merged with continuous-scheduling results.

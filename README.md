@@ -121,7 +121,7 @@ batch/backend/kernel은 아래 명시적 평가 protocol에서 선택하고 하�
 선택한 프로필과 실제 단일 GPU 이름·VRAM이 다르면 중단한다. 대여 직후 CUDA 초기화,
 설치 후 실제 BF16 연산을 확인하며 3090의 전체 평가 성공을 아직 주장하지 않는다.
 
-배포 전 총 예산·GPU/디스크 실단가·회수 여유를 포함한 최대시간과 독립적인 STOP
+기본 strict 정책에서는 배포 전 총 예산·GPU/디스크 실단가·회수 여유를 포함한 최대시간과 독립적인 STOP
 watchdog을 정한다. 승인된 전체 예산을 job manifest에 기록하며 승인 없는 초과,
 자동 충전·승인 범위를 벗어난 추가 Pod/GPU 전환은 금지한다. 기본은 단일 GPU와 작업 전용 Pod volume,
 별도 Network Volume은 생성하지 않는다. 아래 watchdog 값은 실제 외부 감시를 가동한
@@ -145,15 +145,19 @@ Ubuntu 24.04/Python 3.12이며 `NVIDIA_REQUIRE_CUDA`를 설정하지 않는다. 
 2026-09-22 승인 순서는 기존 Pod 유지→로컬 추가1문제→GitHub→별도3090 분석900→
 검증·회수→기존 Pod 부분 결과 회수/정리→새3090 제출900이다. 일시적인 두 Pod 비용도
 기존 지출과 함께 **총 USD6.80**에 포함하며 각각에 USD6.80을 배정하지 않는다.
+이후 사용자가 비용 상한을 더 이상 적용하지 않겠다고 명시적으로 승인한 새 배포에서는
+`MMDL_COST_POLICY=user_waived`를 opt-in으로 지정할 수 있다. 이는 자동충전·결제 설정 변경이
+아니며, 실제 단가·storage reserve·회수·정리 기록은 계속 유지한다. 기본 정책은 strict다.
 
 | protocol 파일 | 실행 방식 | 용도 |
 |---|---|---|
 | `mmmu_val_v1.yaml` | Transformers, batch1, SDPA math | 기존 reference 보존 |
 | `mmmu_val_fast_transformers_v1.yaml` | Transformers, batch1, 자동 SDPA, 토큰 streamer 없음 | 로컬8GB 추가1문제 |
-| `mmmu_val_fast_vllm_v1.yaml` | vLLM0.11.0, 동시2, BF16 GPU-only, 출력 상한32768 | 새3090 분석/제출 |
+| `mmmu_val_fast_vllm_v1.yaml` | vLLM0.11.0, 고정 batch2, BF16 GPU-only, 출력 상한32768 | 과거 분석 기록 보존 |
+| `mmmu_val_continuous_vllm_v1.yaml` | vLLM0.11.0, continuous scheduling, 최대 active2, BF16 GPU-only, 출력 상한32768 | 다음 분석/제출 후보; GPU 미검증 |
 
 모델/processor revision·MMMU900·P0·sampling·이미지 budget·채점은 같다.
-새 `mmmu-val-fast-vllm-32k-v1`은 사용자 승인으로 Qwen 공식 평가 recipe의 생성 상한32768을 적용한다.
+새 `mmmu-val-fast-vllm-32k-continuous-v1`은 사용자 승인으로 Qwen 공식 평가 recipe의 생성 상한32768을 적용한다.
 기존 reference와 완료된 로컬 fast1 smoke의2048은 과거 설정으로 보존하며 새 결과와 합치지 않는다.
 전체 문맥 한도는36864로 둔다. 고정 processor의900개 CPU 전처리 최대 입력2655에
 출력32768을 더한35423보다 크며, 입력+생성 예산 초과 시 잘라내지 않고 중단한다.
@@ -170,7 +174,7 @@ bash scripts/eval.sh --protocol configs/eval/mmmu_val_fast_transformers_v1.yaml 
 
 # GitHub clean clone 이후, 승인된 별도3090에서 분석용만 실행한다.
 bash scripts/reproduce.sh --commit "$MMDL_CODE_COMMIT" --job-id "$MMDL_JOB_ID" \
-  --protocol configs/eval/mmmu_val_fast_vllm_v1.yaml \
+  --protocol configs/eval/mmmu_val_continuous_vllm_v1.yaml \
   --hardware configs/hardware/rtx3090_24gb.yaml --suite mmmu-val-analysis --execute
 ```
 
@@ -185,7 +189,12 @@ vLLM은 `env/requirements-vllm.lock`을 사용한다. Torch2.8/cu128·Transforme
 Numba 호환 NumPy2.2.6과 vLLM 허용 setuptools를 별도로 고정한다. 기존 eval lock/venv는 변경하지 않는다.
 vLLM 입력 token IDs는 pinned processor reference와 정확히 비교하고 불일치는 중단한다.
 reference pixel tensor hash는 vLLM 내부 tensor를 직접 검증했다는 뜻이 아니다.
-동시처리 generation/sample 시간은 batch walltime을 요청 수로 나눈 값이며 개별 응답 지연이 아니다.
+continuous scheduling은 vLLM0.11.0의 `LLMEngine.add_request()`/`step()`으로 최대 2개 request를
+active 상태로 유지한다. 한 request가 완료되면 최종 출력 row를 즉시 저장하고 다음 request를 refill하므로,
+고정 batch처럼 두 request의 완료를 함께 기다리지 않는다.
+`generation_seconds`는 step wall time을 active request 수로 배분한 분석용 값이고
+`request_latency_seconds`와 분리한다. 전체 처리량은 engine invocation wall time으로 계산한다.
+이 protocol은 실제 GPU 검증 전이며, 기존 고정 batch 결과와 합치지 않는다.
 worker allocator peak를 얻지 못하면 `null`로 기록하고, GPU 전체 메모리 snapshot 관측값과 구별한다.
 
 단일-role bundle은 명시된 역할의900개만 검증하며 receipt도 해당 job/Pod에만 유효하다.

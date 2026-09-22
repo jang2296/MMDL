@@ -9,10 +9,12 @@ from scripts import report_baseline
 
 class ReportBaselineTests(unittest.TestCase):
     def test_final_report_rejects_old_or_non_vllm_protocol(self):
-        valid = {"protocol_id": "mmmu-val-fast-vllm-32k-v1", "generation": {"max_new_tokens": 32768},
-                 "execution": {"backend": "vllm", "batch_size": 2}}
+        valid = {"protocol_id": "mmmu-val-fast-vllm-32k-continuous-v1", "generation": {"max_new_tokens": 32768},
+                 "execution": {"backend": "vllm", "batch_size": 2, "scheduling": "continuous"}}
         report_baseline._validate_final_protocol(valid)
-        for key, value in (("protocol_id", "mmmu-val-fast-vllm-v1"),):
+        for key, value in (("protocol_id", "mmmu-val-fast-vllm-v1"),
+                           ("protocol_id", "mmmu-val-fast-vllm-32k-v1"),
+                           ("execution", {"backend": "vllm", "batch_size": 2})):
             altered = dict(valid)
             altered[key] = value
             with self.assertRaises(ValueError):

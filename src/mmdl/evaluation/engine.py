@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -243,23 +244,56 @@ def run(args, cfg, hw, root):
         failed = None
         pending = [sid for sid in ids if sid not in writer.completed]
         batch_size = cfg["execution"]["batch_size"]
-        for offset in range(0, len(pending), batch_size):
-            batch_ids = pending[offset:offset + batch_size]
-            batch_start = time.monotonic()
-            try:
-                requests, records_for_batch = [], []
-                for sid in batch_ids:
-                    subject, index = lookup[sid]
-                    request, record = prepare_request(datasets[subject][index], subject,
-                                                      args.artifact_root, run_dir, cfg)
-                    requests.append(request)
-                    records_for_batch.append(record)
-                invocation["attempted_ids"].extend(batch_ids)
+        continuous = cfg["execution"].get("scheduling") == "continuous"
+        active_records = {}
+
+        def request_stream():
+            for sid in pending:
+                request_start = time.monotonic()
+                invocation["attempted_ids"].append(sid)
                 write_json(invocation_path, invocation)
-                outputs = backend.generate_batch(requests)
-                validate_batch_outputs(requests, outputs)
-                batch_seconds = time.monotonic() - batch_start
-                for record, output in zip(records_for_batch, outputs, strict=True):
+                subject, index = lookup[sid]
+                request, record = prepare_request(datasets[subject][index], subject,
+                                                  args.artifact_root, run_dir, cfg)
+                active_records[sid] = (record, request_start)
+                yield request
+
+        def completed_records():
+            if continuous:
+                with closing(backend.generate_stream(request_stream())) as stream:
+                    for output in stream:
+                        sid = output.get("sample_id")
+                        if sid not in active_records:
+                            raise ValueError("Streaming backend returned an unknown or duplicate sample ID")
+                        record, request_start = active_records.pop(sid)
+                        yield record, output, dict(
+                            total_sample_seconds=time.monotonic() - request_start,
+                            total_sample_timing_policy="request_latency_including_prepare; overlaps_other_requests")
+            else:
+                for offset in range(0, len(pending), batch_size):
+                    batch_ids = pending[offset:offset + batch_size]
+                    batch_start = time.monotonic()
+                    requests, records_for_batch = [], []
+                    for sid in batch_ids:
+                        invocation["attempted_ids"].append(sid)
+                        write_json(invocation_path, invocation)
+                        subject, index = lookup[sid]
+                        request, record = prepare_request(datasets[subject][index], subject,
+                                                          args.artifact_root, run_dir, cfg)
+                        requests.append(request)
+                        records_for_batch.append(record)
+                    outputs = backend.generate_batch(requests)
+                    validate_batch_outputs(requests, outputs)
+                    batch_seconds = time.monotonic() - batch_start
+                    for record, output in zip(records_for_batch, outputs, strict=True):
+                        yield record, output, dict(
+                            total_sample_seconds=batch_seconds / len(batch_ids),
+                            total_sample_timing_policy="batch_wall_divided_by_size",
+                            batch_ids=batch_ids, batch_wall_seconds=batch_seconds)
+
+        try:
+            with closing(completed_records()) as completed:
+                for record, output, timing in completed:
                     sid = record["id"]
                     score = score_response(output["raw_response"], record["question_type"],
                                            record["options"], record["answer"])
@@ -268,25 +302,25 @@ def run(args, cfg, hw, root):
                         r"\s*(?:(?:the\s+)?(?:correct\s+|final\s+)?answer\s*(?:is|:)\s*)?"
                         r"[*\s]*\(?[A-Z]\)?[*\.\s]*", raw, re.IGNORECASE
                     )) if record["question_type"] == "multiple-choice" else len(raw.split()) <= 3
-                    row = record | output | score | dict(
+                    row = record | output | score | timing | dict(
                         model_explanation=None if just_answer else raw or None,
                         inference_invocation_id=invocation_id, run_id=args.run_id,
                         explanation_policy="verbatim narrative, no synthesized explanation; answer-only/short open answer has none; full raw always retained",
-                        status="COMPLETED", total_sample_seconds=batch_seconds / len(batch_ids),
-                        total_sample_timing_policy="batch_wall_divided_by_size",
-                        batch_ids=batch_ids, batch_wall_seconds=batch_seconds)
+                        status="COMPLETED")
                     writer.save(row)
                     invocation["completed_ids"].append(sid)
                     write_json(invocation_path, invocation)
                     print(json.dumps(dict(id=sid, completed=len(writer.completed), total=len(ids),
                                           tokens=output["generated_tokens"], seconds=round(output["generation_seconds"], 3),
-                                          batch_size=len(batch_ids))), flush=True)
-            except Exception as exc:
-                for sid in batch_ids:
-                    if sid not in writer.completed and not (run_dir / "external_failures" / f"{sid}.json").exists():
-                        writer.failure(sid, exc)
-                failed = exc
-                break
+                                          scheduling="continuous" if continuous else "batch",
+                                          max_concurrency=batch_size)), flush=True)
+            if invocation["attempted_ids"] != pending or set(invocation["completed_ids"]) != set(pending):
+                raise RuntimeError("Backend stopped before every pending request completed")
+        except Exception as exc:
+            for sid in invocation["attempted_ids"]:
+                if sid not in writer.completed and not (run_dir / "external_failures" / f"{sid}.json").exists():
+                    writer.failure(sid, exc)
+            failed = exc
         invocation.update(status="FAILED" if failed else "COMPLETED",
                           ended_at=datetime.now(timezone.utc).isoformat())
         write_json(invocation_path, invocation)
@@ -294,7 +328,9 @@ def run(args, cfg, hw, root):
         summary.update(evaluation_seconds_this_invocation=time.monotonic() - evaluation_start,
                        model_load_seconds=backend.load_seconds,
                        total_seconds_this_invocation=time.monotonic() - start,
-                       sample_timing_policy="batch_wall_divided_by_size; not individual request latency",
+                       sample_timing_policy=("generation: engine_step_wall_divided_by_active_requests; "
+                                             "sample: overlapping request latency; use evaluation_seconds_this_invocation for throughput"
+                                             if continuous else "batch_wall_divided_by_size; not individual request latency"),
                        ram_measurement_scope="parent_process_only; excludes vLLM workers",
                        peak_ram_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
                        peak_vram_allocated_bytes=max((r["peak_vram_allocated_bytes"] for r in writer.completed.values()

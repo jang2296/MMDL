@@ -63,15 +63,32 @@ def require_runtime(root):
     task_paths = [paths[name] for name in names if name != "MMDL_VOLUME_ROOT"]
     if any(a.is_relative_to(b) or b.is_relative_to(a) for i, a in enumerate(task_paths) for b in task_paths[i + 1:]):
         raise ValueError("Cache, data, artifacts and venv roots must be separate")
-    reserve = float(os.environ["MMDL_STORAGE_RESERVE_GIB"])
-    budget = float(os.environ["MMDL_BUDGET_USD"])
-    if not math.isfinite(reserve) or reserve < 1 or not math.isfinite(budget) or budget <= 0:
-        raise ValueError("Explicit positive budget and storage reserve are required")
-    deadline = datetime.fromisoformat(os.environ["MMDL_STOP_DEADLINE_UTC"].replace("Z", "+00:00"))
-    if deadline.tzinfo is None or deadline <= datetime.now(timezone.utc):
-        raise ValueError("External watchdog deadline is absent or expired")
-    if not os.environ.get("MMDL_WATCHDOG_ID") or not os.environ.get("RUNPOD_POD_ID"):
-        raise ValueError("An armed external watchdog and actual Pod ID must be recorded")
+    policy = os.environ.get("MMDL_COST_POLICY", "")
+    if policy not in {"", "user_waived"}:
+        raise ValueError("MMDL_COST_POLICY must be empty or explicitly user_waived")
+    try:
+        reserve = float(os.environ["MMDL_STORAGE_RESERVE_GIB"])
+    except (KeyError, ValueError) as exc:
+        raise ValueError("Explicit positive storage reserve is required") from exc
+    if not math.isfinite(reserve) or reserve < 1:
+        raise ValueError("Explicit positive storage reserve is required")
+    if policy == "user_waived":
+        budget = deadline = watchdog = None
+    else:
+        try:
+            budget = float(os.environ["MMDL_BUDGET_USD"])
+            deadline = datetime.fromisoformat(os.environ["MMDL_STOP_DEADLINE_UTC"].replace("Z", "+00:00"))
+            watchdog = os.environ["MMDL_WATCHDOG_ID"]
+        except (KeyError, ValueError) as exc:
+            raise ValueError("Explicit budget, deadline and watchdog are required") from exc
+        if not math.isfinite(budget) or budget <= 0:
+            raise ValueError("Explicit positive budget is required")
+        if deadline.tzinfo is None or deadline <= datetime.now(timezone.utc):
+            raise ValueError("External watchdog deadline is absent or expired")
+        if not watchdog:
+            raise ValueError("An armed external watchdog is required")
+    if not os.environ.get("RUNPOD_POD_ID"):
+        raise ValueError("Actual Pod ID must be recorded")
     if shutil.disk_usage(volume).free < (35 + reserve) * 1024**3:
         raise RuntimeError("Insufficient volume headroom for installation/download/result peak estimate")
     return paths, deadline, budget
@@ -145,8 +162,14 @@ def _preflight_gpu(hardware):
             "container_image": os.environ.get("MMDL_CONTAINER_IMAGE")}
 
 
-def _smoke_sample_ids(backend):
-    return ["validation_Accounting_1", "validation_Biology_29"] if backend == "vllm" else ["validation_Accounting_1"]
+def _smoke_sample_ids(backend, protocol=None):
+    if backend != "vllm":
+        return ["validation_Accounting_1"]
+    ids = ["validation_Accounting_1", "validation_Biology_29"]
+    if protocol is not None and re.search(r"^\s*scheduling:\s*continuous\s*$",
+                                          Path(protocol).read_text(encoding="utf-8"), re.MULTILINE):
+        ids.append("validation_Agriculture_1")
+    return ids
 
 
 def _open_stage_log(directory, job_id, completed_stages, label):
@@ -212,14 +235,16 @@ def execute(args, root):
             raise ValueError("Existing job requires --resume and identical Pod/commit/lock/run binding")
     else:
         job = binding | {"stages": [], "started_at": datetime.now(timezone.utc).isoformat()}
-    job.update(status="RUNNING", logs_closed=False, origin=origin, budget_usd=budget,
-               stop_deadline_utc=deadline.isoformat(), watchdog_id=os.environ["MMDL_WATCHDOG_ID"],
+    policy = os.environ.get("MMDL_COST_POLICY", "") or "strict"
+    job.update(status="RUNNING", logs_closed=False, origin=origin, cost_policy=policy, budget_usd=budget,
+               stop_deadline_utc=deadline.isoformat() if deadline else None,
+               watchdog_id=os.environ.get("MMDL_WATCHDOG_ID") if deadline else None,
                storage_reserve_gib=float(os.environ["MMDL_STORAGE_RESERVE_GIB"]))
     write_json(job_file, job)
     env = os.environ | {"PIP_NO_CACHE_DIR": "1", "PYTHONPATH": str(root / "src")}
 
     def stage(label, command):
-        if datetime.now(timezone.utc) >= deadline:
+        if deadline is not None and datetime.now(timezone.utc) >= deadline:
             raise RuntimeError("External stop deadline reached; preserve results for recovery")
         log, stream = _open_stage_log(job_file.parent, args.job_id, len(job["stages"]), label)
         begun = time.monotonic()
@@ -307,7 +332,7 @@ def execute(args, root):
             run_id = f"{args.job_id}-{role}"
             command = common + ["--run-id", run_id, "--run-role", role, "--mode", "smoke" if role == "smoke" else "full"]
             if role == "smoke":
-                for sample_id in _smoke_sample_ids(backend):
+                for sample_id in _smoke_sample_ids(backend, args.protocol):
                     command += ["--sample-id", sample_id]
             if (artifacts / "runs" / run_id).exists():
                 if not args.resume:
@@ -339,7 +364,7 @@ def main(argv=None):
                           "suite": args.suite,
                           "steps": ["clean GitHub checkout", "exact-lock venv", "doctor", "pinned download",
                                     "one smoke", "selected 900 run(s)", "verify and bundle"],
-                          "external_gate": "approved budget, persistent volume and independently armed STOP watchdog"}))
+                          "external_gate": "persistent volume; strict approved budget and STOP watchdog, or explicit user_waived cost policy"}))
         return
     execute(args, Path(__file__).resolve().parents[3])
 

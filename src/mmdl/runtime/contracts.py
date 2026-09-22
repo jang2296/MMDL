@@ -28,6 +28,9 @@ EXECUTION_PROFILES = {
     "mmmu-val-fast-transformers-v1": EXECUTION | {"sdpa_kernel": "auto"},
     "mmmu-val-fast-vllm-32k-v1": dict(backend="vllm", batch_size=2, attention="vllm",
                                   sdpa_kernel="not_applicable", deterministic=False),
+    "mmmu-val-fast-vllm-32k-continuous-v1": dict(backend="vllm", batch_size=2, attention="vllm",
+                                  sdpa_kernel="not_applicable", deterministic=False,
+                                  scheduling="continuous"),
 }
 HARDWARE_KEYS = set("name placement gpu_index expected_vram_gib gpu_weight_cap_gib "
                     "gpu_reserve_gib cpu_weight_cap_gib cpu_available_fraction "
