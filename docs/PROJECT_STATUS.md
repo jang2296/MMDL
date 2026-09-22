@@ -8,6 +8,26 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
 
 ## 2026-09-22 가속 전환 — 진행 중
 
+### 게시 및 별도3090 실행 기록
+
+- 가속 코드/보고서 게시 SHA: `34c5cdb5559e00d1bda92e4932914344d112aba4`.
+  GitHub feature ref의 SHA 일치 확인. 최종 CPU 단위검사61개, Ruff, mypy(22 source files),
+  shell syntax와 staged 공개 파일 검사를 통과했다. 로컬 추가 모델 추론은 하지 않았다.
+- 새 분석용3090은 GitHub에서 위 commit을 clean clone했다. 2026-09-22 02:26 UTC 부근
+  `mmmu-val-analysis` bootstrap을 시작했다. GPU3090 24576MiB, driver555.42.02,
+  Python3.12.3, `/workspace` XFS 영구 mount, 설치 전 CUDA/UVM 검사 PASS.
+  별도 exact vLLM lock 설치→doctor→고정 model/MMMU 다운로드→2문제 GPU smoke→900 순서다.
+  이 기록 시점에는 설치 중이며 vLLM GPU 추론 성공이나900 완료로 보고하지 않는다.
+- 해당 base image의 SSH 환경에는 `RUNPOD_POD_ID`가 없어, provider MCP에서 확인한
+  실제 Pod ID를 실행 shell에서 명시했다. 비밀키를 환경·저장소에 복사하지 않았다.
+- 비용은 이전 failed Pod와 기존/새3090을 합산한다. 두3090 GPU 실단가는 각각$0.22/h이며,
+  storage를 별도 보수적으로 합산한12:00 UTC 중지 안전장치가 Pod 생성 전에 설정되었다.
+  그 시각까지 보수적 합산 상한$5.20, 회수·정리 여유$1.60이며 총$6.80을 넘기는 승인이 아니다.
+  billing API는 지연되므로 이미 청구된 금액만으로 잔액을 추정하지 않는다.
+- 기존3090 읽기 전용 재점검(02:24:55 UTC):118/900, 시스템 실패0,
+  EOS80/length38,103,823 생성tokens/6,641.079초, GPU33%, VRAM19,696/24,576MiB.
+  기존 실행/코드/설정은 바꾸지 않았다. 분석900 검증·회수 전 기존 Pod를 삭제하지 않는다.
+
 이 절은 아래 이전 실행 순서보다 우선한다. 사용자는 기존 느린3090 유지,
 가속 구현→추가 로컬1문제→GitHub→별도3090 분석900→검증·회수 후 기존Pod 정리→
 새3090 제출900을 승인했다. 두 Pod가 잠시 겹쳐도 총 비용은 USD6.80 이내다.

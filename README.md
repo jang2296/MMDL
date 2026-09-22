@@ -198,7 +198,8 @@ Git과 Python 3.12가 있는 승인 Pod에서, 실제 영구 볼륨 mount를 `MM
 `MMDL_STORAGE_RESERVE_GIB`는 설치·다운로드·Arrow 변환·두 결과·압축 peak 외의 여유다.
 서버 여유는 대여 용량에 맞춰 명시하며 로컬 WSL의 최소 50 GiB는 낮출 수 없다.
 `MMDL_BUDGET_USD`, `MMDL_STOP_DEADLINE_UTC`, `MMDL_WATCHDOG_ID`와 provider가 주는
-`RUNPOD_POD_ID`를 기록한다. 비밀 API 키는 저장소나 명령줄에 넣지 않는다.
+`RUNPOD_POD_ID`를 기록한다. 이미지가 이 환경변수를 제공하지 않으면 provider API/콘솔에서
+확인한 실제 Pod ID를 실행 shell에 명시한다. 비밀 API 키는 저장소나 명령줄에 넣지 않는다.
 
 `MMDL_CODE_COMMIT`은 게시된 **40자리 전체 SHA**, `MMDL_JOB_ID`는 새 job ID,
 `MMDL_CHECKOUT`은 영구 볼륨 아래 새 디렉터리다. 다음 **한 shell 호출**이 GitHub 취득부터
