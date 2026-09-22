@@ -11,6 +11,7 @@ from mmdl.evaluation.cli import validate_execution
 from mmdl.evaluation.prompt import build_messages
 from mmdl.evaluation.writer import RunWriter, finalize, render
 from mmdl.runtime.artifacts import git_commit, resolve_image
+from scripts import validate_run
 
 
 class ReproductionContractTests(unittest.TestCase):
@@ -22,13 +23,16 @@ class ReproductionContractTests(unittest.TestCase):
         self.assertTrue(inspect("model.safetensors", b"fixture"))
         self.assertFalse(inspect(".env.example", b'export HF_HOME="$HOME/cache"'))
 
-    def test_offload_full_is_rejected_and_roles_cannot_be_mixed(self):
-        args = SimpleNamespace(mode="full", job_id="job", run_id="job-assignment",
-                               run_role="assignment", require_commit="a" * 40)
+    def test_offload_full_is_rejected_and_evaluation_requires_bound_run(self):
+        args = SimpleNamespace(mode="full", job_id="job", run_id="job-evaluation",
+                               run_role="evaluation", require_commit="a" * 40)
         with self.assertRaises(ValueError):
             validate_execution(args, {"placement": "cpu_offload"})
         validate_execution(args, {"placement": "gpu_only"})
-        args.run_role = "analysis"
+        args.run_id = "job-other"
+        with self.assertRaises(ValueError):
+            validate_execution(args, {"placement": "gpu_only"})
+        args.run_role = "assignment"
         with self.assertRaises(ValueError):
             validate_execution(args, {"placement": "gpu_only"})
 
@@ -41,14 +45,25 @@ class ReproductionContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             git_commit(Path("."), "main")
 
-    def test_shared_images_are_safe_and_viewable_in_both_runs(self):
+    def test_evaluation_and_legacy_artifact_audits_require_commit_and_bound_name(self):
+        for role in ("evaluation", "assignment", "analysis"):
+            for commit, name, message in (("main", f"job-{role}", "Missing fixed commit"),
+                                           ("a" * 40, "wrong-name", "Wrong job/run role")):
+                manifest = {"identity": {"run_role": role, "job_id": "job", "git_commit": commit}}
+                with self.subTest(role=role, commit=commit), \
+                        patch.object(Path, "is_file", return_value=True), \
+                        patch.object(validate_run, "read_json", side_effect=[{}, manifest, manifest]):
+                    with self.assertRaisesRegex(AssertionError, message):
+                        validate_run.validate(Path(name), Path("public") / name)
+
+    def test_shared_images_are_safe_in_evaluation_and_legacy_runs(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             relative = "../../assets/images/" + "a" * 64 + ".png"
             image = root / "assets/images" / ("a" * 64 + ".png")
             image.parent.mkdir(parents=True)
             image.write_bytes(b"synthetic-not-a-benchmark")
-            for role in ("assignment", "analysis"):
+            for role in ("evaluation", "assignment", "analysis"):
                 run_dir = root / "runs" / f"job-{role}"
                 with RunWriter(run_dir, {}, ["validation_Accounting_1"]) as writer:
                     writer.save({"id": "validation_Accounting_1", "subject": "Accounting", "correct": True,

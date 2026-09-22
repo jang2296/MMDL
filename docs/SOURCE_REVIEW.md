@@ -102,6 +102,9 @@ backend/batching freedom; it does not change benchmark inputs or the generation 
 The protocol records `request_latency_seconds` separately from `generation_seconds`.
 The latter is an attribution metric that divides each `step()` wall time by the number
 of active requests at that step; it is not an additive elapsed-time measure. Throughput
-uses the actual engine-invocation wall time. The protocol is not GPU-validated yet, and
-the earlier fixed-batch `mmmu-val-fast-vllm-32k-v1` run remains historical rather than
-being merged with continuous-scheduling results.
+uses the actual engine-invocation wall time. The 3-request GPU smoke and slot refill were
+validated, but a complete 900-request result is not yet validated. The earlier fixed-batch
+`mmmu-val-fast-vllm-32k-v1` and its assignment/analysis artifact names remain historical
+and are not relabeled or merged. An already-running continuous32k legacy run may serve as
+the canonical score source after it independently passes 900-row coverage, integrity, and
+rescoring checks; no second full analysis run is required.

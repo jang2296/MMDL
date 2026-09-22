@@ -1,18 +1,19 @@
 # AGENTS.md — MMDL: Qwen3-VL-4B 평가·개선·재현
 
-> 기준일: 2026-09-21. 저장소 루트 지침. 실행정책: **로컬 30문제 검증 → GitHub 고정 commit → RunPod 900문제 × 2회 → 로컬 회수·검증 → 작업 전용 클라우드 자원 삭제**.
+> 기준일: 2026-09-21. 저장소 루트 지침. 실행정책: **로컬 smoke/부분 검증 → GitHub 고정 commit → RunPod 단일 900문제 평가 → 로컬 회수·검증 → 작업 전용 클라우드 자원 삭제**.
 
-> **2026-09-22 사용자 변경 승인(아래 이전 운영 제한보다 우선):** 기존 느린 Pod는 유지한다.
-> 별도 가속 protocol(vLLM batch2 또는 Transformers 자동 SDPA, 토큰 streamer 제거)을 구현하고
-> 로컬 추가 1문제만 검증→GitHub 고정 commit→별도 3090에서 분석용900 검증·회수 순으로 진행한다.
-> 분석용900이 정상 검증되면 기존 Pod의 부분 결과도 먼저 회수한 뒤 중지·삭제하고,
-> 새 3090에서 같은 가속 protocol/commit으로 제출용900을 실행한다. 제출 점수는 새 제출용 run만 사용한다.
-> 일시적 두 Pod 동시 사용을 허용하지만 **총 USD6.80**에 이전 사용료·두 Pod·storage·회수를 모두 포함한다.
+> **2026-09-22 사용자 변경 승인(아래 이전 운영 제한보다 우선):** 기존 실행은 역사 자료로 보존한다.
+> 별도 가속 protocol(vLLM continuous scheduling, 토큰 streamer 제거)을 구현하고
+> 로컬 smoke 검증→GitHub 고정 commit→단일 3090 평가 run으로 900문제를 검증·회수한다.
+> ‘분석용’과 ‘테스트용/제출용’은 새 평가 역할로 만들지 않으며, 하나의 저장 결과를 점수와 실패 검토에 함께 사용한다.
+> 이미 실행 중인 legacy continuous32k run은 전체900과 독립 검증을 완료하면 canonical 결과의 근거로 사용할 수 있다.
+> 코드 변경은 실행 중인 Pod에 자동 적용하지 않는다. 추가 사용자 승인에 따라 먼저 끝나는 Pod는 900개 완료 후 로컬 회수·독립 검증을 거쳐 삭제하며, 불필요한 후속 900회는 차단한다.
+> 최초 USD6.80 상한은 과거 승인 기록이며, 사용자가 이후 비용 제한을 철회한 현재 운영 승인과 구분한다.
 > 기존 reference protocol은 보존하며 모델/revision/BF16/데이터/P0/생성/이미지/채점은 변경하지 않는다.
-> 로컬 CPU-offload 1문제는 Transformers 경로 검증이고 vLLM 검증이 아니다. vLLM은 새3090의2문제 smoke로 검증한다.
+> 로컬 CPU-offload 1문제는 Transformers 경로 검증이고 vLLM 검증이 아니다. continuous vLLM은 기존3090의3문제 smoke로 검증했다.
 > 추가 사용자 지정: 제출 보고서 정본은 `Assignment_1.md`. 수업 §4의 `reports/mmmu_baseline.md`에도
 > 동일 본문을 유지하며 템플릿8절, 공식 출처/revision, 자체 설계 이유·차이·한계를 정확히 적는다.
-> **최신 승인:** 새 분석/제출은 공식 생성 상한32768 (`mmmu-val-fast-vllm-32k-v1`)로 전환한다.
+> **최신 승인:** 단일 평가 run은 공식 생성 상한32768 (`mmmu-val-fast-vllm-32k-continuous-v1`)로 전환한다.
 > 기존 실행/완료한 로컬1 smoke의2048은 역사적 결과로 보존한다. 새 출력 상한을 자동 축소하지 않는다.
 > 로컬 추가 모델 추론은 하지 않는다. 가속 코드 검사 후32768 설정을 GitHub에 게시하고 새3090에서 검증한다.
 > `[수업]`은 첨부 규정, `[사용자]`는 이번 실행범위, `[설계]`는 구현 정책, `[외부]`는 공식 기술 근거다. 팀 설계를 수업 규정으로 말하지 않는다.
@@ -21,12 +22,12 @@
 ## 0. 에이전트 작업 규칙과 현재 범위
 
 - 적용 지침 전체, Git 루트/상태, 기존 코드·README·설정·테스트·진행 기록, `local_sources/assignment_guidance.md`·`SUBMISSION_TEMPLATE.md`를 확인한다. 기존 작업을 reset하거나 덮어쓰지 않는다.
-- `[사용자]` **로컬은 1문제→1과목 30문제 검증, RunPod는 과제용 A900+분석용 B900의 실제 추론 2회**다. 로컬900은 금지하며 이미 시작된 full은 해당 작업만 식별해 샘플 저장 경계에서 중지·PARTIAL 보존한다. 정상30문제 실행/증거는 활용한다.
+- `[사용자]` **로컬은 smoke/필요한 부분 검증, RunPod는 단일 `mmmu-val` 평가 run의 실제 추론 900회**다. 별도 분석용/테스트용 full run을 새로 만들지 않는다. 이미 시작된 legacy continuous32k full run은 완료·독립검증 시 그 저장 결과를 canonical 평가와 실패 검토에 사용할 수 있다.
 - 확인된 팀 GitHub `MMDL`로 검사된 파일의 commit/push, 승인 예산 내 RunPod 실행·회수, 로컬 검증 후 작업 전용 자원 삭제를 허용한다. 정상 단계별 재승인은 없다. 계정/권한·저장소·가격/예산 상한/최대시간·회수경로 미확정은 유료 배포 전에 확인한다. 무제한 지출 승인이 아니다.
-- 이번에는 평가만 완성한다. MMMU-Pro는 취득/hash 확인만 한다. **향후 승인된 MMMU test/MMMU-Pro full도 RunPod**에서 하되 현재 A/B에는 포함하지 않는다. 모든 benchmark split/파생본은 학습·증강 금지다.
+- 이번에는 평가만 완성한다. MMMU-Pro는 취득/hash 확인만 한다. **향후 승인된 MMMU test/MMMU-Pro full도 RunPod**에서 하되 현재 evaluation에는 포함하지 않는다. 모든 benchmark split/파생본은 학습·증강 금지다.
 - 기존 파일을 우선한다. 중복 구현·빈 학습/증강기·가짜PASS·임시v2/final/new·불필요한 프레임워크/대시보드/문서를 만들지 않는다. 전역/다른 프로젝트 환경, OS/WSL/driver, Codex 모델·추론 강도·지침 한도를 임의 변경하지 않는다.
 - 상태·결정·검증 명령·증거·다음 행동은 `docs/PROJECT_STATUS.md`에 갱신한다. 변경 없는 전체 재독, 대형 로그/900응답 대화 출력, 자동 에이전트 토론/무한 리팩터링을 금지한다. 같은 차단 원인의 수정·검증은 최대3회다. 장시간 작업은 실행장비 프로세스/로그와 완료 대기·드문 확인으로 운영한다.
-- A/B 검증·로컬 회수·전용 자원 삭제 확인 후 즉시 멈춘다. 심층 풀이 분석·개선 연구·학습·발표 제작은 다음 명령 이후다.
+- 단일 평가 검증·로컬 회수·전용 자원 삭제 확인 후 즉시 멈춘다. 심층 풀이 분석·개선 연구·학습·발표 제작은 다음 명령 이후다.
 
 ## 1. 프로젝트·근거 자료
 
@@ -133,7 +134,7 @@ export MMDL_VENV_ROOT="${MMDL_VENV_ROOT:-$HOME/mmdl-envs/eval}"
 
 유효 cache를 먼저 확인하고 재다운로드·실물복제·전체 snapshot을 피한다. WSL 내부와 VHDX Windows 볼륨, 다운로드/변환/회수 압축해제 peak를 검사하여 **로컬50GiB 여유**를 남긴다. 부족하면 임의 삭제하지 않는다.
 
-RunPod는 GitHub 새 checkout/격리 환경에서 공식 pinned 모델·데이터를 받는다. **로컬 코드/venv/모델/cache 업로드는 금지**하고 Pod 내 A/B 재사용은 허용한다. 경로의 실제 mount를 검사하며 미회수 결과는 stop에도 남는 작업 전용 Pod volume disk에 둔다. container disk만을 유일 저장소로 쓰지 않고 Network Volume은 기본 생성하지 않는다. [W10,W11] 대여 용량은 설치/취득/변환/두 결과/bundle peak+기록된 안전여유로 정하며 로컬50GiB를 무조건 복사하지 않는다.
+RunPod는 GitHub 새 checkout/격리 환경에서 공식 pinned 모델·데이터를 받는다. **로컬 코드/venv/모델/cache 업로드는 금지**하고 평가 run 안에서 cache를 재사용한다. 경로의 실제 mount를 검사하며 미회수 결과는 stop에도 남는 작업 전용 Pod volume disk에 둔다. container disk만을 유일 저장소로 쓰지 않고 Network Volume은 기본 생성하지 않는다. [W10,W11] 대여 용량은 설치/취득/변환/단일 결과/bundle peak+기록된 안전여유로 정하며 로컬50GiB를 무조건 복사하지 않는다.
 
 MMMU는 지정 validation30config×30 고유ID/유형을 검증한다. `MMMU_DEV_VAL` TSV·dev 포함본·다른 revision으로 대체하지 않는다. Pro `standard (10 options)` test는 취득 시 공식 전체 commit SHA를 한 번 고정해 보관/hash 확인만 한다. 향후 Pro 표본수를900으로 가정하지 않는다.
 
@@ -141,7 +142,7 @@ MMMU는 지정 validation30config×30 고유ID/유형을 검증한다. `MMMU_DEV
 
 ## 5. 공통 평가 조건과 P0
 
-`[설계]` 5060 SMOKE/PARTIAL과 RunPod A/B, 이후 fine-tuned MMMU 평가에 **같은 평가 protocol**을 사용한다. 모델/processor/BF16, 데이터 revision/순서, 이미지 변환, P0, 생성/seed/길이, parser/scoring/실패 처리, batch=1, Transformers reference, SDPA/math를 고정한다. 하드웨어 profile은 배치 장치·메모리 예산·경로·worker만 바꾼다. run 역할/저장 상세도는 별도 실행 메타데이터이며 프롬프트를 바꾸지 않는다.
+`[설계]` 로컬 smoke와 RunPod 단일 평가 run, 이후 fine-tuned MMMU 평가에 **같은 평가 protocol**을 사용한다. 모델/processor/BF16, 데이터 revision/순서, 이미지 변환, P0, 생성/seed/길이, parser/scoring/실패 처리를 고정한다. backend·batch·attention은 선택한 protocol에 기록한다. smoke/evaluation은 실행 범위이며 서로 다른 점수 역할이 아니다. legacy A/B run은 역사 자료로 보존하고 새 run과 섞지 않는다.
 
 ### 공통 초안: `configs/eval/mmmu_val_v1.yaml`
 
@@ -180,7 +181,7 @@ execution:
   deterministic: true
 ```
 
-sampling은 Qwen Instruct Evaluation Reproduction, seed3407은 공식 README를 근거로 확인한다. [W1,W2] 참고 실행 코드 seed42와의 차이, per-sample seed가 팀 설계임을 기록한다. 지정 model card VL 길이16384와 GitHub 평가안내32768의 차이를 숨기지 않는다. **2048과 pixel budget은 실측 전 팀 초안**이며 공식 정답값이 아니다. 기존 smoke 증거를 우선 활용하여 메모리·속도·잘림으로 공통값을 확정하고 A 시작 전 동결한다. A/B 중 자동 fallback이나 점수 기반 조정을 하지 않는다.
+sampling은 Qwen Instruct Evaluation Reproduction, seed3407은 공식 README를 근거로 확인한다. [W1,W2] 참고 실행 코드 seed42와의 차이, per-sample seed가 팀 설계임을 기록한다. 지정 model card VL 길이16384와 GitHub 평가안내32768의 차이를 숨기지 않는다. **2048과 pixel budget은 실측 전 팀 초안**이며 공식 정답값이 아니다. 기존 smoke 증거를 우선 활용하여 메모리·속도·잘림으로 공통값을 확정한다. 자동 fallback이나 점수 기반 조정을 하지 않는다.
 
 ### P0의 근거·전문·이미지 입력
 
@@ -197,7 +198,7 @@ Please select the correct answer from the options above.
 
 주관식은 `Question: {question}`만 쓰고 Options/선택 지시문을 생략한다. 유효한 원본 hint가 있을 때만 `Hint: {hint}\n`을 앞에 붙인다. 정답·해설에서 hint를 만들지 않는다. 실제 이미지 content를 참조 관계/순서대로 먼저 넣고 P0 텍스트를 마지막에 둔 단일 user message에 지정 processor의 `apply_chat_template(add_generation_prompt=True)`를 적용한다.
 
-P0 파일·chat template·입력 변환을 hash로 고정한다. 이미지 누락/문자열 대체, 이중 resize, Qwen2.5의 28계수 가정 복사를 막고 실제 image tensor·크기·grid·token hash를 확인한다. Qwen3-VL processor의 pixel budget/32계수 안내와 강의 예시를 구분한다. [W1] 추가 system/few-shot/CoT/JSON/answer-reason 강제/도구/대화 이력을 넣지 않는다. **분석용 B에도 P1을 만들지 않는다**. Transformers reference는 공식 vLLM 실행과 동일하다고 주장하지 않는다.
+P0 파일·chat template·입력 변환을 hash로 고정한다. 이미지 누락/문자열 대체, 이중 resize, Qwen2.5의 28계수 가정 복사를 막고 실제 image tensor·크기·grid·token hash를 확인한다. Qwen3-VL processor의 pixel budget/32계수 안내와 강의 예시를 구분한다. [W1] 추가 system/few-shot/CoT/JSON/answer-reason 강제/도구/대화 이력을 넣지 않는다. 분석용/테스트용 별도 P1을 만들지 않는다. Transformers reference는 공식 vLLM 실행과 동일하다고 주장하지 않는다.
 
 ## 6. 로컬 5060 / RunPod 4090 하드웨어 profile
 
@@ -206,7 +207,7 @@ P0 파일·chat template·입력 변환을 hash로 고정한다. 이미지 누�
 | profile 항목 | rtx5060_8gb | rtx4090_24gb |
 |---|---|---|
 | placement | cpu_offload | gpu_only |
-| 허용 평가 | 로컬 SMOKE/PARTIAL, 30문제 규모 | RunPod full A/B, 향후 승인된 final |
+| 허용 평가 | 로컬 SMOKE/PARTIAL, 30문제 규모 | RunPod 단일 full evaluation, 향후 승인된 final |
 | gpu_index / expected_vram_gib | 0 / 8 | 0 / 24 |
 | gpu_weight_cap_gib / gpu_reserve_gib | 5.5 / 2.0 | 20.0 / 3.0 |
 | cpu_weight_cap_gib / cpu_available_fraction | 12.0 / 0.65 | 12.0 / 0.65 (weight offload에 사용 안 함) |
@@ -231,7 +232,7 @@ RunPod는 GitHub **전체 commit SHA**·clean tracked files·lock hash를 검사
 
 같은 코드/seed도 GPU 간 응답·점수 동일성을 보장하지 않는다. [W6] 절차/결과/재학습 재현을 구별하고 입력 hash→raw→parsed→score를 비교한다. 이후 baseline/fine-tuned는 가능한 같은4090 환경·P0로 비교한다.
 
-## 8. 한 명령 재현과 실제 평가 2회
+## 8. 한 명령 재현과 실제 평가 1회
 
 아래는 **구현 후 검증할 CLI 계약**이다. 기존 동등 인자를 재사용하면 README도 일치시킨다. 파일 존재를 실행 성공으로 표시하지 않는다.
 
@@ -242,8 +243,9 @@ bash scripts/eval.sh --protocol configs/eval/mmmu_val_v1.yaml \
   --model-path "${MMDL_MODEL_PATH:-Qwen/Qwen3-VL-4B-Instruct}" \
   --data-root "$MMDL_DATA_ROOT/evaluation/mmmu" --run-id smoke-local-30 \
   --mode partial --subject Accounting --limit 30
-# RunPod: 설치→doctor→취득→최소GPU검증→900×2→검증/포장
-bash scripts/reproduce.sh --stage evaluate --target runpod --suite mmmu-val-two-runs \
+# RunPod: 설치→doctor→취득→최소GPU검증→단일900→검증/포장
+bash scripts/reproduce.sh --stage evaluate --target runpod --suite mmmu-val \
+  --commit "$MMDL_CODE_COMMIT" --protocol configs/eval/mmmu_val_continuous_vllm_v1.yaml \
   --hardware configs/hardware/rtx4090_24gb.yaml --model-ref manifests/models/baseline.json \
   --model-path "${MMDL_MODEL_PATH:-Qwen/Qwen3-VL-4B-Instruct}" \
   --data-root "$MMDL_DATA_ROOT/evaluation/mmmu" --job-id "$MMDL_JOB_ID" --execute
@@ -253,17 +255,17 @@ bash scripts/rescore.sh --artifact-root "$MMDL_ARTIFACT_ROOT" --run-id "$RUN_ID"
 
 README에는 Git 설치된 승인 Pod에서 **GitHub 취득→전체 SHA 검사→reproduce를 한 번의 shell 호출**로 수행하는 완결 명령도 둔다. 수동 코드수정/설치 탐색 없이 경로만 바꿔 실행한다. `--model-path`/`MMDL_MODEL_PATH`로 모델 위치를 바꾸되 baseline revision/hash를 검사한다. `reproduce.sh`는 기본 dry-run, `--execute`로 실행하며 학습/증강/final을 자동 시작하지 않는다.
 
-A=`<job_id>-assignment`는 제출용900, B=`<job_id>-analysis`는 분석 자료용900이다. 같은 Pod에서 A→B 순차 실행하고 다운로드/venv/읽기 전용 가중치를 재사용한다. **B도900개 전부 실제 생성**하며 응답/예측 cache·KV·대화 상태를 재사용하지 않는다. 매 샘플 RNG/생성 상태를 초기화한다. 동일 seed의 별도 재실행이지 독립 난수 표본은 아니며 같은 응답도 정상이다. seed에 run_id를 추가하지 않는다.
+새 실행은 `<job_id>-evaluation` 하나로 식별한다. `--suite mmmu-val`은 smoke 후 하나의 900문제 평가를 수행하며, 저장된 raw response와 sample record를 점수 산출 및 실패 검토에 함께 사용한다. 별도 분석 900회를 새로 만들지 않는다. 이미 실행 중인 legacy continuous32k run은 전체900·독립검증 완료 후 같은 목적의 결과로 채택할 수 있으나, 다른 run과 합치거나 평균내지 않는다. 같은 run 재개에서는 성공 ID 중복생성을 막는다. smoke/중단 시도는 본 평가와 별도 상태로 기록한다.
 
-제출은 A만 사용한다. A/B 평균·좋은 응답 선택·B로 A 대체·한 추론의 두 view로 두 테스트 대체를 금지한다. 같은 run 재개에서는 성공ID 중복생성을 막는다. 각900/900, 총 **1,800 sample inference**를 검증하며 smoke/중단시도는 별도 집계한다.
+기존 `<job_id>-assignment`/`<job_id>-analysis` artifact는 legacy 형식으로 읽을 수 있게 보존한다. 새 단일 run으로 이름을 바꾸거나 서로 합치지 않는다. legacy run을 재개할 때는 기록된 원래 commit/protocol을 사용하며 최신 CLI의 새 role로 재실행하지 않는다. continuous32k legacy run이 900개와 독립검증을 완료하면 보고서 full score 근거로 사용할 수 있다. 새 CLI는 legacy role을 새 run으로 재분류하지 않는다.
 
-Bash는 `set -euo pipefail`, script 기준 root, 안전한 인자/실패 전파를 적용한다. 로컬 제어측에서 회수/정리를 연결해 Pod 삭제 후에도 증거를 남긴다. 교수님은 RunPod 계정 없이4090에서 `eval.sh` 한 명령으로 A를 재현할 수 있어야 한다.
+Bash는 `set -euo pipefail`, script 기준 root, 안전한 인자/실패 전파를 적용한다. 로컬 제어측에서 회수/정리를 연결해 Pod 삭제 후에도 증거를 남긴다. 교수님은 RunPod 계정 없이4090에서 `eval.sh` 한 명령으로 평가를 재현할 수 있어야 한다.
 
 ## 9. 평가 engine·파싱·모델 풀이 기록
 
 30과목각30·고유ID/유형·원래 보기·이미지 참조/순서를 검증한다. 주관식을 버리거나 객관식으로 바꾸지 않는다. 정답/해설은 채점·저장에만 전달한다. [S4 pp.8,11;W7]
 
-`presence_penalty` 실제 적용을 검사하고 미지원이면 테스트된 **generated-only logits processor**를 쓴다. 무시/중복 적용을 금지하고 대상/순서·실제 generation config(eos/pad/stop/default 포함)를 저장한다. A/B 동일 seed는 다음 팀 정책이다.
+`presence_penalty` 실제 적용을 검사하고 미지원이면 테스트된 **generated-only logits processor**를 쓴다. 무시/중복 적용을 금지하고 대상/순서·실제 generation config(eos/pad/stop/default 포함)를 저장한다. 동일 evaluation seed는 다음 팀 정책이다.
 
 ```python
 import hashlib
@@ -273,9 +275,9 @@ seed = int.from_bytes(value[:8], "big") % (2**31)  # master_seed=3407
 
 매 샘플 Python/NumPy/Torch RNG를 설정하고 ID 순서를 고정한다. 공식 `mmmu/utils/eval_utils.py` parser/open-ended evaluator의 commit/license/수정점을 기록한다. **무작위 추측 fallback은 NO_PARSE=오답**으로 바꾸고 생성 답변만 파싱한다. 빈답/파싱 실패도 완료 추론이면900 분모에 포함한다. OOM/입력 오류/누락은 시스템 실패이고 INCOMPLETE다.
 
-A/B 모두 ID·과목·유형·질문·원래 보기·이미지 참조·실제 prompt/messages·seed·입력 hash·**raw response 전체**·추출답·gold·정오·파싱 상태·종료 사유·token 수·시간을 외부 JSONL에 저장한다. `model_explanation`은 실제 출력 원문 구간/offset·추출 규칙만 보존한다. 없으면 `null/NOT_GENERATED`, 불명확하면 상태와 raw를 남긴다. **전문제 기록은 전문제 풀이 생성 보장이 아니다.** Codex/외부 모델이 답/풀이를 채우지 않는다. `gold_explanation`은 데이터셋에 있을 때만 따로 둔다. 설명 사실성과 정답 일치는 별개다. [S4 p.12]
+단일 evaluation은 ID·과목·유형·질문·원래 보기·이미지 참조·실제 prompt/messages·seed·입력 hash·**raw response 전체**·추출답·gold·정오·파싱 상태·종료 사유·token 수·시간을 외부 JSONL에 저장한다. `model_explanation`은 실제 출력 원문 구간/offset·추출 규칙만 보존한다. 없으면 `null/NOT_GENERATED`, 불명확하면 상태와 raw를 남긴다. **전문제 기록은 전문제 풀이 생성 보장이 아니다.** Codex/외부 모델이 답/풀이를 채우지 않는다. `gold_explanation`은 데이터셋에 있을 때만 따로 둔다. 설명 사실성과 정답 일치는 별개다. [S4 p.12]
 
-B는900개 질문/보기/이미지/응답/실제 풀이/정답의 단순 로컬 HTML/Markdown 열람본을 만든다. 원문 요약/삭제를 금지하고 HTML escape·안전한 상대경로를 적용한다. 사용 이미지만 공유 assets로 한 번 보존하거나 검증된 로컬 data root에 연결해 Pod 삭제 후 열람을 보장한다. base64 중복·무거운 웹앱·불필요한 hidden state/attention 전체 저장은 금지한다.
+같은900개 질문/보기/이미지/응답/실제 풀이/정답으로 단순 로컬 HTML/Markdown 열람본을 만든다. 추가 추론이나 원문 요약/삭제 없이 HTML escape·안전한 상대경로를 적용한다. 사용 이미지만 공유 assets로 한 번 보존하거나 검증된 로컬 data root에 연결해 Pod 삭제 후 열람을 보장한다. base64 중복·무거운 웹앱·불필요한 hidden state/attention 전체 저장은 금지한다.
 
 공개 `results/<run_id>/`에는 작은 summary·30과목 scores·resolved eval/hardware config·sanitized environment·run manifest·외부 상대참조/hash만 둔다. 전체 predictions/failures JSONL·열람본/이미지는 외부 root에 둔다. run별 peakGPU/RAM·전체시간과 다운로드/설치/모델로드/평가/포장/전송을 구별한다. 반올림 전 macro=정답수/900, 공식 차이의 퍼센트포인트를 검사한다.
 
@@ -287,7 +289,7 @@ protocol hash는 P0/chat template/입력변환/dataset 내용 manifest/parser/ev
 
 ### 비용 gate
 
-로컬 준비 후 단일 Pod만 대여한다. 당시 가격/GPU/disk·예산 상한·최대시간·전송/복구 유예를 기록한다. 가격은 공식 console에서 확인한다. [W12] 권한/예산 미확정이면 무료 준비까지만 한다. 자동충전/결제·계정한도 변경, 다른 유료 서비스/LLM judge·다중 Pod·고가 GPU 확대는 금지한다. A/B는 같은 Pod/cache로 수행하며 인적 분석/문서 편집을 기다리며 idle시키지 않는다. 설치/취득/전송/재시도도 예산에 포함한다.
+새 유료 작업은 승인된 Pod 범위에서만 수행한다. 당시 가격/GPU/disk·비용 정책·전송/복구 여유를 기록한다. 가격은 공식 console에서 확인한다. [W12] 자동충전/결제·계정한도 변경, 다른 유료 서비스/LLM judge·미승인 Pod·고가 GPU 확대는 금지한다. 평가에 필요한 cache를 재사용하며 인적 분석/문서 편집을 기다리며 idle시키지 않는다. 설치/취득/전송/재시도 비용도 기록하며, 현재 비용 상한 철회와 기본 strict 정책을 구분한다.
 
 대여 전 로컬 수신/여유 공간·SSH 전송·작업 전용 Pod/volume ID·정리 권한을 확인한다. SSH 단절에도 작동하는 최대시간/진행정지 watchdog을 준비하되 GPU이용률0만으로 중지하지 않는다.
 
@@ -295,7 +297,7 @@ protocol hash는 P0/chat template/입력변환/dataset 내용 manifest/parser/ev
 
 **REMOTE_VERIFIED→LOCAL_VERIFIED→POD_TERMINATED→OWNED_STORAGE_DELETED→CLEANUP_VERIFIED** 순서다.
 
-A/B별 결과·공유 이미지·JSONL/열람본·환경/설정/출처/로그/명령을 한 bundle로 전송해도 실제 두 run은 분리한다. 파일 path/크기/SHA-256·archive hash·job/run/code/protocol을 기록한다. 모델/venv/전체 HF·benchmark cache/강의 원본은 회수하지 않는다.
+평가 결과·공유 이미지·JSONL/열람본·환경/설정/출처/로그/명령을 회수한다. 과거 서로 다른 run은 합치지 않는다. 파일 path/크기/SHA-256·archive hash·job/run/code/protocol을 기록한다. 모델/venv/전체 HF·benchmark cache/강의 원본은 회수하지 않는다.
 
 로컬에서 SSH/SFTP/rsync로 pull한다. 점진 회수는 닫힌 shard만 하고 최종 전체 hash를 검사한다. 안전한 압축해제(경로이탈/외부 symlink 금지), 각900 고유ID/30과목/필수필드/산술·저장raw 재채점·이미지 열람을 검증해 **로컬 receipt**를 만든다. 원격 자체검사/전송 exit code만으로 삭제하지 않는다.
 
@@ -335,7 +337,7 @@ effective batch = micro_batch × accumulation steps × world_size
 
 CPU CI는 고정계약/금지override·정답누출·이미지/주관식·parser/penalty·coverage/산술·hash/재개·secret/대용량·archive 경로를 검사한다. fixture는 자체 제작한다. hardware의 dtype/prompt/generation/image/backend/batch override를 거부한다. 로컬full·A/B응답cache·receipt 없는 삭제·잘못된Pod/공유volume 삭제 거부는 mock으로 검사한다.
 
-`로컬1→1과목30→GitHub고정→RunPod최소smoke→A900→B900→회수→정리` 순서다. 다중이미지/주관식은30문제/fixture 안에서 우선 확인하고 부족한 유형만 최소 추가SMOKE로 분리한다. 유효30/완료full을 반복하지 않는다.
+`로컬1→1과목30→GitHub고정→RunPod최소smoke→단일 evaluation900→회수→정리` 순서다. 다중이미지/주관식은30문제/fixture 안에서 우선 확인하고 부족한 유형만 최소 추가SMOKE로 분리한다. 유효30/완료full을 반복하지 않는다.
 
 | 독립 상태 | 증거 |
 |---|---|
@@ -343,18 +345,18 @@ CPU CI는 고정계약/금지override·정답누출·이미지/주관식·parser
 | 로컬SMOKE/PARTIAL | 30ID·protocol·peak·시간·입력/파싱/재개 |
 | GitHub 재현 | commit·clean checkout·lock·한 명령 로그 |
 | RunPod/실제4090 | doctor·BF16·device map·실GPU명 |
-| A/B FULL 각각 | 각900/900·실제생성·raw·30과목·산술 |
+| evaluation FULL | 900/900·실제생성·raw·30과목·산술 |
 | 로컬 회수 | hash·재채점·coverage·열람·receipt |
 | 자원 정리 | 전용Pod/storage 삭제·잔존조회 |
 
-미실행/실패를 PASS로 채우지 않는다. 제출은 A와1000자 이내 근거 기반 격차 진단이다. 심층 분석은 보류한다. 교수님은 공개코드commit→lock→4090 doctor→pinned artifact/hash→같은eval→재채점으로 재현한다. RunPod는 수업 강제 provider가 아니다. checkpoint 교체 재평가에는 재학습이 필요 없고 재학습 재현은 별도 요청이다.
+미실행/실패를 PASS로 채우지 않는다. 제출은 검증된 단일900 결과와1000자 이내 근거 기반 격차 진단이다. 심층 분석은 보류한다. 교수님은 공개코드commit→lock→4090 doctor→pinned artifact/hash→같은eval→재채점으로 재현한다. RunPod는 수업 강제 provider가 아니다. checkpoint 교체 재평가에는 재학습이 필요 없고 재학습 재현은 별도 요청이다.
 
 ## 13. 진행·제출·발표
 
 `[수업: S3 pp.7,19–21; S1 §4; S8]` 팀장 public repo, 전체 팀원 collaborator,
 각자 계정 commit/PR, default branch에 최종 병합을 따른다.
 Assignment 본문은 `reports/mmmu_baseline.md`, 기존 경로에는 링크를 둔다.
-전체 수업 흐름은 환경/입력/채점→baseline→실패분석→보고서/발표다. 현재 goal은 A/B 평가·자료 회수·템플릿 기록·클라우드 정리까지만 수행한다.
+전체 수업 흐름은 환경/입력/채점→baseline→실패분석→보고서/발표다. 현재 goal은 단일 evaluation·자료 회수·템플릿 기록·클라우드 정리까지만 수행한다.
 Assignment 마감은 **9/28 23:59**, 첫 발표는 학습 완료 보고가 아니라 개선 계획이다.
 
 | PPP #1 | 팀 순서 |

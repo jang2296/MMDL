@@ -86,10 +86,12 @@ class ReproduceTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     arguments(["--job-id", "fixture", "--commit", "a" * 40] + extra)
 
-    def test_accelerated_suites_are_accepted(self):
-        for suite in ("mmmu-val-analysis", "mmmu-val-assignment"):
-            self.assertEqual(arguments(["--job-id", "fixture", "--commit", "a" * 40,
-                                        "--suite", suite]).suite, suite)
+    def test_only_one_evaluation_suite_is_accepted(self):
+        self.assertEqual(arguments(["--job-id", "fixture", "--commit", "a" * 40]).suite, "mmmu-val")
+        for suite in ("mmmu-val-two-runs", "mmmu-val-analysis", "mmmu-val-assignment"):
+            with self.subTest(suite=suite), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    arguments(["--job-id", "fixture", "--commit", "a" * 40, "--suite", suite])
 
     def test_smoke_ids_match_backend_batch_policy(self):
         self.assertEqual(_smoke_sample_ids("transformers"), ["validation_Accounting_1"])
@@ -251,6 +253,12 @@ class ReproduceTests(unittest.TestCase):
             self.assertTrue((jobs / "fixture.000-venv.log").is_file())
             job = read_json(jobs / "fixture.json")
             self.assertEqual(job["status"], "REMOTE_VERIFIED")
+            self.assertEqual(job["suite"], "mmmu-val")
+            self.assertEqual(job["runs"], {"evaluation": "fixture-evaluation"})
+            self.assertEqual([stage["stage"] for stage in job["stages"] if stage["stage"] in {"smoke", "evaluation"}],
+                             ["smoke", "evaluation"])
+            self.assertEqual([stage["stage"] for stage in job["stages"]][7:],
+                             ["smoke", "evaluation", "evaluation-rescore", "evaluation-audit"])
             self.assertEqual(job["stages"][0]["log"], "fixture.001-venv.log")
             self.assertNotEqual(job["stages"][0]["log"], "fixture.000-venv.log")
             smoke = next(stage for stage in job["stages"] if stage["stage"] == "smoke")

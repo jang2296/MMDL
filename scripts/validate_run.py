@@ -37,8 +37,8 @@ def validate(run_dir, public_dir):
     manifest = read_json(run_dir / "run_manifest.json")
     public = read_json(public_dir / "run_manifest.json")
     identity = manifest["identity"]
-    paired = identity.get("run_role") in {"assignment", "analysis"}
-    if paired:
+    managed = identity.get("run_role") in {"assignment", "analysis", "evaluation"}
+    if managed:
         assert re.fullmatch(r"[0-9a-f]{40}", identity.get("git_commit", "")), "Missing fixed commit"
         assert run_dir.name == f"{identity['job_id']}-{identity['run_role']}", "Wrong job/run role"
     invocations = {p.stem: read_json(p) for p in (run_dir / "inference_invocations").glob("*.json")}
@@ -80,7 +80,7 @@ def validate(run_dir, public_dir):
                 with Image.open(image_path) as decoded:
                     decoded.verify()
                 checked_images.add(image_path)
-        if paired:
+        if managed:
             iid, vid = row["inference_id"], row["inference_invocation_id"]
             assert re.fullmatch(r"[0-9a-f]{32}", iid) and iid not in inference_ids
             assert row["run_id"] == run_dir.name and row["inference_started_at"]

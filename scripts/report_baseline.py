@@ -98,8 +98,9 @@ def _load_complete_run(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], d
     environment = _read_json(run_dir / "environment.json")
     backend = _read_json(run_dir / "backend.json")
     manifest = _read_json(run_dir / "run_manifest.json")
-    if manifest.get("identity", {}).get("run_role") == "analysis":
-        raise ValueError("The analysis run must never supply the Assignment submission score")
+    # Legacy role labels are provenance, not a different evaluation protocol.
+    if manifest.get("identity", {}).get("run_role") not in {"evaluation", "assignment", "analysis"}:
+        raise ValueError("Report requires a managed evaluation with fixed-commit inference provenance")
     cfg_path = _config_path(run_dir, manifest)
     cfg = _read_yaml(cfg_path)
     _validate_final_protocol(cfg)
@@ -445,11 +446,12 @@ def _sampled_device_memory(run_dir: Path, manifest: dict[str, Any], backend_name
         return "미측정: 회수된 job manifest가 없어 vLLM worker allocator 밖 장치 메모리를 확인할 수 없음"
     job = _read_json(job_path)
     stages = job.get("stages", [])
-    matches = [stage for stage in stages if isinstance(stage, dict) and stage.get("run_role") == role]
+    matches = [stage for stage in stages if isinstance(stage, dict)
+               and stage.get("run_role", stage.get("stage")) == role]
     values = [float(stage["peak_observed_device_memory_used_bytes"]) for stage in matches
               if isinstance(stage.get("peak_observed_device_memory_used_bytes"), (int, float))]
     if not values:
-        return "미측정: 이 role의 900-run device memory sampling record가 없음"
+        return "미측정: 이 평가의 900-run device memory sampling record가 없음"
     stage = next(stage for stage in matches if stage.get("peak_observed_device_memory_used_bytes") == max(values))
     interval = stage.get("gpu_memory_sample_interval_ms", "미제공")
     samples = stage.get("gpu_memory_sample_count", stage.get("sample_count", "미제공"))
@@ -482,8 +484,9 @@ def _status_metrics(summary: dict[str, Any], manifest: dict[str, Any], run_dir: 
     role = identity.get("run_role", "미제공") if isinstance(identity, dict) else "미제공"
     command = _command(run_dir, manifest)
     return (
-        f"- **제출 상태**: `COMPLETE900` 독립 검증 완료; job `{job_id}`, role `{role}`, "
+        f"- **제출 상태**: `COMPLETE900` 독립 검증 완료; job `{job_id}`, run `{run_dir.name}`, "
         f"900/900 completed, denominator `{summary.get('denominator')}`.\n"
+        f"- **원본 실행 표식**: `{role}` (기존 기록 보존; 점수·실패 분석은 같은 응답을 사용).\n"
         f"- **재현 명령**: `{command}`\n"
     )
 

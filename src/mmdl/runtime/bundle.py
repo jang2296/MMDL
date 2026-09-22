@@ -21,9 +21,11 @@ from mmdl.runtime.environment import check_storage
 
 
 _MANIFEST = "bundle_manifest.json"
-_ROLES = ("assignment", "analysis")
+_EVALUATION_ROLES = ("evaluation",)
+_LEGACY_ROLES = ("assignment", "analysis")
 _SUITE_ROLES = {
-    "mmmu-val-two-runs": _ROLES,
+    "mmmu-val": _EVALUATION_ROLES,
+    "mmmu-val-two-runs": _LEGACY_ROLES,
     "mmmu-val-assignment": ("assignment",),
     "mmmu-val-analysis": ("analysis",),
 }
@@ -139,7 +141,7 @@ def _job_contract(job_id: str, metadata: dict[str, Any]) -> tuple[str, str, tupl
     suite: str
     roles: tuple[str, ...]
     if version is None:
-        schema, suite, roles = "mmdl-runpod-bundle-v1", "mmmu-val-two-runs", _ROLES
+        schema, suite, roles = "mmdl-runpod-bundle-v1", "mmmu-val-two-runs", _LEGACY_ROLES
     elif version == 2:
         suite_value = metadata.get("suite")
         if not isinstance(suite_value, str) or suite_value not in _SUITE_ROLES:
@@ -351,7 +353,7 @@ def _cross_run_checks(artifact_root: Path, public_root: Path, job_id: str,
         evidence[role] = {"run_id": run_name, "identity": identity, "count": len(rows),
                           "viewer": str((run_dir / "review.html").relative_to(artifact_root)),
                           "validation": validation}
-    if roles == _ROLES:
+    if roles == _LEGACY_ROLES:
         for key in ("protocol_sha256", "model_sha256", "code_sha256", "environment_sha256", "hardware"):
             if identities["assignment"].get(key) != identities["analysis"].get(key):
                 raise ValueError(f"A/B identity differs: {key}")
@@ -433,13 +435,13 @@ def cleanup_targets(receipt: dict[str, Any], ledger: dict[str, Any], pod_id: str
             raise ValueError("Legacy receipt does not prove both full A/B runs")
     elif bundle_schema == "mmdl-runpod-bundle-v1":
         if (receipt.get("suite") != "mmmu-val-two-runs"
-                or receipt.get("roles") != list(_ROLES)
+                or receipt.get("roles") != list(_LEGACY_ROLES)
                 or receipt.get("expected_inference_records") != 1800
-                or runs.get("roles") != list(_ROLES)
+                or runs.get("roles") != list(_LEGACY_ROLES)
                 or runs.get("total_inference_records") != 1800
                 or any(not isinstance(runs.get(role), dict)
                        or runs[role].get("run_id") != f"{job_id}-{role}"
-                       or runs[role].get("count") != 900 for role in _ROLES)):
+                       or runs[role].get("count") != 900 for role in _LEGACY_ROLES)):
             raise ValueError("Legacy receipt does not prove both exact full A/B runs")
     else:
         roles = receipt.get("roles")

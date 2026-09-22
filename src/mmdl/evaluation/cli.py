@@ -15,10 +15,12 @@ def validate_execution(args, hw):
     if args.job_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,60}", args.job_id):
         raise ValueError("Invalid job ID")
     if args.run_role in {"assignment", "analysis"}:
+        raise ValueError("Legacy assignment/analysis roles cannot start a new evaluation")
+    if args.run_role == "evaluation":
         if args.mode != "full" or not args.job_id or args.run_id != f"{args.job_id}-{args.run_role}":
-            raise ValueError("Assignment/analysis roles require a full run and the matching job-role run ID")
+            raise ValueError("Evaluation role requires a full run and the matching job-role run ID")
         if not args.require_commit:
-            raise ValueError("Assignment/analysis runs require a fixed Git commit")
+            raise ValueError("Evaluation runs require a fixed Git commit")
 
 
 def main():
@@ -34,7 +36,7 @@ def main():
     parser.add_argument("--artifact-root", type=Path, default=default_path("MMDL_ARTIFACT_ROOT", "mmdl-artifacts"))
     parser.add_argument("--public-root", type=Path, default=root / "results")
     parser.add_argument("--job-id")
-    parser.add_argument("--run-role", choices=["standalone", "smoke", "assignment", "analysis"], default="standalone")
+    parser.add_argument("--run-role", choices=["standalone", "smoke", "evaluation"], default="standalone")
     parser.add_argument("--require-commit")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--mode", choices=["smoke", "partial", "full"], default="full")

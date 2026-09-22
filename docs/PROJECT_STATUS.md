@@ -1,13 +1,24 @@
 # Assignment 1 baseline — 작업 상태
 
-2026-09-21. 새 요청: 로컬 30문제 검증 → 팀 GitHub 고정 commit의 clean clone →
-RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 → 전용 자원 삭제.
-제출 점수는 A만 사용한다. 로컬900·학습·증강·MMMU test/Pro 추론·심층 분석은 금지한다.
+2026-09-22. 최신 운영 문서: 로컬 smoke/부분 검증 → 팀 GitHub 고정 commit의 clean clone →
+RunPod 단일 `mmmu-val` evaluation 900 추론 → 로컬 회수·검증 → 전용 자원 삭제.
+새 분석용/테스트용 full run은 만들지 않으며, 저장된 evaluation 결과를 점수와 실패 검토에 함께 사용한다.
+기존 A/B run은 역사 자료다. 단, 이미 실행된 continuous32k legacy run이 900개와 독립검증을 완료하면 canonical score 근거로 채택할 수 있다.
 팀 저장소는 `https://github.com/jang2296/MMDL`, 최초 총 RunPod 비용 상한은 USD 6.80이었다.
-현재 상한 철회는 아래 최신 승인 기록을 따른다.
+현재 상한 철회는 아래 최신 승인 기록을 따른다. 이 문서 갱신만으로 기존 Pod를 중지·삭제·재배포하지 않는다.
 대여 직전 GPU+storage 실단가에서 회수/복구 여유를 제외한 최대시간을 계산·기록한다.
 
-## 최신 실행 전환 — continuous scheduling (2026-09-22)
+## 단일 평가 전환 및 회수 승인 (2026-09-22)
+
+- 새 CLI는 `--suite mmmu-val`, `<job>-evaluation` 하나만 실행한다. smoke는 별도이며 두 번째 full900은 없다.
+- 기존 `assignment`/`analysis`의 원본 run ID·commit·hash를 보존한다. 이미 실행 중인 continuous32k 결과는 COMPLETE900·독립 재채점·무결성 검증 후 그대로 제출과 실패 검토에 쓸 수 있다.
+- legacy 재개는 원래 commit에서만 한다. 보고서 생성 코드 commit과 실제 추론 commit은 다를 수 있으며 이를 숨기지 않는다.
+- CPU 76 tests, Ruff, mypy 22 source files, Bash syntax, 단일평가 dry-run 통과. 새 이름의 GPU900은 재실행하지 않았다.
+- 사용자는 먼저 완료되는 Pod를 로컬 회수·검증 후 삭제하도록 승인했다. 14:14 UTC 기존2048 launcher만 SIGSTOP 상태로 확인했고, 현재 evaluator는 그대로 실행 중이다. 이는 불필요한 후속900 차단이며 현재 평가 중단이 아니다. 회수·삭제 완료는 아직 주장하지 않는다.
+
+아래의 A/B 순서·대기 상태는 당시 실행 기록이다. 별도 B900을 시작하라는 현재 지시가 아니며 위 단일평가·회수 승인으로 대체되었다.
+
+## 과거 실행 전환 — continuous scheduling (2026-09-22)
 
 사용자 승인에 따라 기존 reference Pod는 유지하고, 새 분석 Pod의 partial 결과를 보존한 뒤
 일시 중지하여 장문 생성 원인을 점검했다. 새 분석 run은 70/900, 시스템 실패 0으로 보존되었고

@@ -16,7 +16,13 @@ from mmdl.runtime.artifacts import sha256_file
 class BundleTests(unittest.TestCase):
     def _roots(self, base: Path, *, suite: str | None = None) -> tuple[Path, Path]:
         artifacts, public = base / "artifacts", base / "public"
-        roles = ("assignment", "analysis") if suite is None else (suite.removeprefix("mmmu-val-"),)
+        roles_by_suite = {
+            None: ("assignment", "analysis"),
+            "mmmu-val": ("evaluation",),
+            "mmmu-val-assignment": ("assignment",),
+            "mmmu-val-analysis": ("analysis",),
+        }
+        roles = roles_by_suite[suite]
         for role in roles:
             (artifacts / "runs" / f"job-{role}").mkdir(parents=True)
             (public / f"job-{role}").mkdir(parents=True)
@@ -62,6 +68,35 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(manifest["schema"], "mmdl-runpod-bundle-v2")
             self.assertEqual(manifest["roles"], ["analysis"])
             self.assertEqual(manifest["runs"], {"analysis": "job-analysis"})
+
+    def test_single_evaluation_bundle_creates_verifies_and_guards_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            artifacts, public = self._roots(base, suite="mmmu-val")
+            archive = base / "evaluation.tar.gz"
+            evidence = {"status": "REMOTE_VERIFIED", "bundle_schema": "mmdl-runpod-bundle-v2",
+                        "suite": "mmmu-val", "roles": ["evaluation"], "pod_id": "pod-1",
+                        "total_inference_records": 900,
+                        "evaluation": {"run_id": "job-evaluation", "count": 900}}
+            with patch("mmdl.runtime.bundle._cross_run_checks", return_value=evidence):
+                result = create(artifacts, public, "job", archive)
+                receipt = verify(archive, sha256_file(archive), base / "recovered", base)
+            with tarfile.open(archive, "r:gz") as stream:
+                manifest, _ = _manifest_from_archive(stream)
+            self.assertEqual(result["total_inference_records"], 900)
+            self.assertEqual(manifest["schema"], "mmdl-runpod-bundle-v2")
+            self.assertEqual(manifest["suite"], "mmmu-val")
+            self.assertEqual(manifest["roles"], ["evaluation"])
+            self.assertEqual(manifest["runs"], {"evaluation": "job-evaluation"})
+            self.assertEqual(receipt["roles"], ["evaluation"])
+
+            ledger = {"job_id": "job", "pod_id": "pod-1", "created_for_job": True,
+                      "preexisting_pod_ids": [], "preexisting_volume_ids": [],
+                      "network_volumes": [{"id": "volume-1", "created_for_job": "job", "shared": False}]}
+            self.assertEqual(cleanup_targets(receipt, ledger, "pod-1")["network_volume_ids"], ["volume-1"])
+            ledger["network_volumes"][0]["shared"] = True
+            with self.assertRaisesRegex(ValueError, "shared"):
+                cleanup_targets(receipt, ledger, "pod-1")
 
     def test_schema_v2_rejects_missing_or_extra_suite_roles(self) -> None:
         for runs in ({}, {"analysis": "job-analysis", "assignment": "job-assignment"}):

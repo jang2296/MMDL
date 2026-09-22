@@ -23,7 +23,7 @@ HARDWARE_PROFILES = {
     "rtx5090_32gb.yaml": (r"NVIDIA(?: GeForce)? RTX 5090", 31 * 1024**3),
 }
 _GPU_SAMPLE_INTERVAL_MS = 500
-_INFERENCE_STAGES = frozenset({"smoke", "assignment", "analysis"})
+_INFERENCE_STAGES = frozenset({"smoke", "evaluation"})
 
 
 def arguments(argv=None):
@@ -31,7 +31,7 @@ def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=["evaluate"], default="evaluate")
     parser.add_argument("--target", choices=["runpod"], default="runpod")
-    parser.add_argument("--suite", choices=["mmmu-val-two-runs", "mmmu-val-analysis", "mmmu-val-assignment"], default="mmmu-val-two-runs")
+    parser.add_argument("--suite", choices=["mmmu-val"], default="mmmu-val")
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--protocol", type=Path, default=root / "configs/eval/mmmu_val_v1.yaml")
@@ -223,12 +223,11 @@ def execute(args, root):
         raise ValueError("Selected evaluation data must be under MMDL_DATA_ROOT")
     public = artifacts / "public"
     job_file = artifacts / "jobs" / f"{args.job_id}.json"
-    roles = ("assignment", "analysis") if args.suite == "mmmu-val-two-runs" else (args.suite.rsplit("-", 1)[-1],)
     binding = {"schema_version": 2, "job_id": args.job_id, "pod_id": os.environ["RUNPOD_POD_ID"], "git_commit": args.commit,
                "suite": args.suite, "backend": backend, "lock_sha256": sha256_file(lock),
                "protocol_sha256": sha256_file(args.protocol),
                "hardware": Path(args.hardware).name, "hardware_sha256": sha256_file(args.hardware),
-               "runs": {role: f"{args.job_id}-{role}" for role in roles}}
+               "runs": {"evaluation": f"{args.job_id}-evaluation"}}
     if job_file.exists():
         job = read_json(job_file)
         if not args.resume or any(job.get(key) != value for key, value in binding.items()):
@@ -296,6 +295,7 @@ def execute(args, root):
         stage_record = {"stage": label, "log": log.name, "seconds": time.monotonic() - begun,
                         "exit_code": result.returncode}
         if label in _INFERENCE_STAGES:
+            stage_record["run_role"] = label
             stage_record.update(_gpu_sample_metrics(gpu_log, monitor_diagnostic))
         job["stages"].append(stage_record)
         write_json(job_file, job)
@@ -328,7 +328,7 @@ def execute(args, root):
                   "--model-ref", args.model_ref, "--model-path", args.model_path, "--data-root", data,
                   "--artifact-root", artifacts, "--public-root", public, "--require-commit", args.commit,
                   "--job-id", args.job_id, "--no-download"]
-        for role in ("smoke", *roles):
+        for role in ("smoke", "evaluation"):
             run_id = f"{args.job_id}-{role}"
             command = common + ["--run-id", run_id, "--run-role", role, "--mode", "smoke" if role == "smoke" else "full"]
             if role == "smoke":
@@ -363,7 +363,7 @@ def main(argv=None):
         print(json.dumps({"status": "DRY_RUN", "job_id": args.job_id, "commit": args.commit,
                           "suite": args.suite,
                           "steps": ["clean GitHub checkout", "exact-lock venv", "doctor", "pinned download",
-                                    "one smoke", "selected 900 run(s)", "verify and bundle"],
+                                    "one smoke", "one evaluation (900 samples)", "verify and bundle"],
                           "external_gate": "persistent volume; strict approved budget and STOP watchdog, or explicit user_waived cost policy"}))
         return
     execute(args, Path(__file__).resolve().parents[3])

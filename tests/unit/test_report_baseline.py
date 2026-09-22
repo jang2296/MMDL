@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,72 @@ from scripts import report_baseline
 
 
 class ReportBaselineTests(unittest.TestCase):
+    def test_complete_run_accepts_current_and_legacy_labels_without_relabeling(self):
+        cfg = {"protocol_id": report_baseline.FINAL_PROTOCOL_ID,
+               "generation": {"max_new_tokens": 32768},
+               "execution": {"backend": "vllm", "batch_size": 2, "scheduling": "continuous"},
+               "dataset": {"subjects": list(SUBJECTS), "expected_total": 900}}
+        summary = {"status": "COMPLETE", "mode": "full", "expected_count": 900,
+                   "completed_count": 900, "denominator": 900, "missing_count": 0,
+                   "unresolved_failure_count": 0, "correct": 0, "macro_average": 0.0}
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "runs/job-analysis"
+            (run_dir / "samples").mkdir(parents=True)
+            for subject in SUBJECTS:
+                for index in range(30):
+                    row = {"id": f"validation_{subject}_{index}", "subject": subject,
+                           "status": "COMPLETED", "correct": False}
+                    (run_dir / "samples" / f"{row['id']}.json").write_text(json.dumps(row))
+            for name, value in (("summary.json", summary), ("environment.json", {}), ("backend.json", {})):
+                (run_dir / name).write_text(json.dumps(value))
+            (run_dir / "resolved_eval_config.yaml").write_text(json.dumps(cfg))
+            manifest_path = run_dir / "run_manifest.json"
+            for role in ("evaluation", "analysis", "assignment"):
+                with self.subTest(role=role):
+                    manifest_path.write_text(json.dumps({"identity": {"run_role": role}}))
+                    original = manifest_path.read_bytes()
+                    # Isolate the reporting boundary; the artifact auditor has its own tests.
+                    with patch("scripts.validate_run.validate") as audit:
+                        loaded = report_baseline._load_complete_run(run_dir)
+                    audit.assert_called_once_with(run_dir, Path(temporary) / "public/job-analysis")
+                    self.assertEqual(loaded[3]["identity"]["run_role"], role)
+                    self.assertEqual(manifest_path.read_bytes(), original)
+            for role in ("standalone", "smoke", "unknown", None):
+                identity = {"run_role": role} if role is not None else {}
+                manifest_path.write_text(json.dumps({"identity": identity}))
+                with self.subTest(rejected_role=role), patch("scripts.validate_run.validate") as audit:
+                    with self.assertRaisesRegex(ValueError, "fixed-commit inference provenance"):
+                        report_baseline._load_complete_run(run_dir)
+                    audit.assert_not_called()
+            manifest_path.write_text(json.dumps({"identity": {"run_role": "evaluation"}}))
+            with patch("scripts.validate_run.validate", side_effect=AssertionError("hash mismatch")):
+                with self.assertRaisesRegex(ValueError, "independent recovered-run audit"):
+                    report_baseline._load_complete_run(run_dir)
+            for changes in ({"status": "INCOMPLETE"}, {"completed_count": 899},
+                            {"unresolved_failure_count": 1}, {"macro_average": 0.5}):
+                (run_dir / "summary.json").write_text(json.dumps(summary | changes))
+                with self.subTest(changes=changes), patch("scripts.validate_run.validate") as audit:
+                    with self.assertRaises(ValueError):
+                        report_baseline._load_complete_run(run_dir)
+                    audit.assert_not_called()
+
+    def test_device_memory_uses_exact_current_or_legacy_evaluation_stage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "jobs").mkdir()
+            for role in ("evaluation", "analysis", "assignment"):
+                manifest = {"identity": {"job_id": "job", "run_role": role}}
+                (root / "jobs/job.json").write_text(json.dumps({"stages": [
+                    {"stage": "smoke", "peak_observed_device_memory_used_bytes": 30 * 1024**3},
+                    {"stage": role, "peak_observed_device_memory_used_bytes": 20 * 1024**3,
+                     "gpu_memory_sample_interval_ms": 500, "gpu_memory_sample_count": 10},
+                ]}))
+                with self.subTest(role=role):
+                    value = report_baseline._sampled_device_memory(root / f"runs/job-{role}", manifest, "vllm")
+                    self.assertIn("20.00 GiB", value)
+                    self.assertNotIn("30.00 GiB", value)
+                    self.assertIn(f"`{role}`", value)
+
     def test_final_report_rejects_old_or_non_vllm_protocol(self):
         valid = {"protocol_id": "mmmu-val-fast-vllm-32k-continuous-v1", "generation": {"max_new_tokens": 32768},
                  "execution": {"backend": "vllm", "batch_size": 2, "scheduling": "continuous"}}
