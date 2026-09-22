@@ -45,6 +45,7 @@ class ReproduceTests(unittest.TestCase):
             with self.subTest(origin=origin), self.assertRaises(ValueError):
                 _validate_origin(origin)
         hardware_root = Path(__file__).resolve().parents[2] / "configs/hardware"
+        _validate_hardware_profile(hardware_root / "rtx3090_24gb.yaml")
         _validate_hardware_profile(hardware_root / "rtx4090_24gb.yaml")
         _validate_hardware_profile(hardware_root / "rtx5090_32gb.yaml")
         with self.assertRaises(ValueError):
@@ -89,6 +90,25 @@ class ReproduceTests(unittest.TestCase):
             report.write_text(json.dumps(payload))
             with self.assertRaises(RuntimeError):
                 _validate_doctor_gpu(report, hardware)
+
+    def test_doctor_requires_selected_rtx3090_with_23_gib(self):
+        with tempfile.TemporaryDirectory() as temp:
+            report = Path(temp) / "doctor.json"
+            payload = {"environment": {"torch": {"gpus": [{
+                "name": "NVIDIA GeForce RTX 3090",
+                "memory_total_bytes": 23 * 1024**3,
+            }]}}}
+            report.write_text(json.dumps(payload))
+            hardware = Path(__file__).resolve().parents[2] / "configs/hardware/rtx3090_24gb.yaml"
+            _validate_doctor_gpu(report, hardware)
+            for gpu in (
+                {"name": "NVIDIA GeForce RTX 4090", "memory_total_bytes": 24 * 1024**3},
+                {"name": "NVIDIA GeForce RTX 3090", "memory_total_bytes": 22 * 1024**3},
+            ):
+                payload["environment"]["torch"]["gpus"] = [gpu]
+                report.write_text(json.dumps(payload))
+                with self.subTest(gpu=gpu), self.assertRaises(RuntimeError):
+                    _validate_doctor_gpu(report, hardware)
 
     def test_resume_uses_new_log_after_interrupted_stage(self):
         with tempfile.TemporaryDirectory() as temp:

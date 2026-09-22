@@ -109,13 +109,16 @@ python scripts/check_submission.py
 팀 저장소는 `https://github.com/jang2296/MMDL.git`이다. 로컬 30문제와 필요한 구조별
 smoke 통과 후 공통 protocol을 동결하고 검사된 feature commit을 게시한다.
 RunPod에는 로컬 코드/venv/모델/cache/결과를 복사하지 않는다. 아래 경로는 현재
-코드·CPU 검사 대상이며 **실제 RunPod clean-clone/4090/A900/B900 검증은 아직 미실행**이다.
+코드·CPU 검사를 통과했고 RunPod의 GitHub clean clone·lock 설치를 확인했다.
+**GPU/BF16 검사 통과와 A900/B900 전체 평가는 아직 완료되지 않았다.**
 
-4090 재고가 없을 때 사용할 명시적 대안은 `configs/hardware/rtx5090_32gb.yaml`이다.
-5090도 같은 BF16/P0/generation/parser/batch 1/SDPA math를 사용하며 CPU offload하지 않는다.
-기본값은 계속 4090이다. 아래 `reproduce.sh` 실행·재개에
-`--hardware configs/hardware/rtx5090_32gb.yaml`을 추가해야 5090 프로필을 선택한다.
-선택한 프로필과 실제 단일 GPU 이름·VRAM이 다르면 중단한다. 5090 실측 검증은 아직 미실행이다.
+사용자가 승인한 3090 대안은 `configs/hardware/rtx3090_24gb.yaml`이다.
+기본값은 계속 4090이며, 아래 `reproduce.sh` 실행·재개에
+`--hardware configs/hardware/rtx3090_24gb.yaml`을 추가하면 3090 프로필을 선택한다.
+기존 5090 대안은 `configs/hardware/rtx5090_32gb.yaml`로 보존한다.
+모든 프로필은 같은 BF16/P0/generation/parser/batch 1/SDPA math를 유지하며 CPU offload하지 않는다.
+선택한 프로필과 실제 단일 GPU 이름·VRAM이 다르면 중단한다. 대여 직후 CUDA 초기화,
+설치 후 실제 BF16 연산을 확인하며 3090의 전체 평가 성공을 아직 주장하지 않는다.
 
 배포 전 총 예산·GPU/디스크 실단가·회수 여유를 포함한 최대시간과 독립적인 STOP
 watchdog을 정한다. 승인된 전체 예산을 job manifest에 기록하며 승인 없는 초과,

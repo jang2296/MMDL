@@ -19,6 +19,7 @@ TEAM_ORIGIN = re.compile(
 )
 HARDWARE_PROFILES = {
     "rtx4090_24gb.yaml": (r"NVIDIA(?: GeForce)? RTX 4090", 23 * 1024**3),
+    "rtx3090_24gb.yaml": (r"NVIDIA(?: GeForce)? RTX 3090", 23 * 1024**3),
     "rtx5090_32gb.yaml": (r"NVIDIA(?: GeForce)? RTX 5090", 31 * 1024**3),
 }
 
@@ -82,7 +83,7 @@ def _validate_origin(origin):
 def _validate_hardware_profile(hardware):
     profile = Path(hardware).name
     if profile not in HARDWARE_PROFILES:
-        raise ValueError("Only the approved RTX 4090 or RTX 5090 hardware profile is allowed")
+        raise ValueError("Only the approved RTX 3090, RTX 4090, or RTX 5090 hardware profile is allowed")
     return profile
 
 

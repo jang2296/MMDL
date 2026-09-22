@@ -81,11 +81,15 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
    최초 재고 부족3회 후 같은 조건의 재시도를 중단했다. 19:31 UTC 새 US-IL-1 4090 표시가 나타나
    공급 조건 변경을 근거로 해당 위치에만 1회 추가 요청했지만 역시 HTTP400이었다(재고 거절 누적4회).
    표시 재고와 실제 배정의 차단이 지속된다. 19:33 UTC Pod 0 / Network Volume 0 재확인.
-   목표를 BLOCKED로 전환하며 추가 유료 요청은 새 지시 또는 확인 가능한 정상 공급 변화가 필요하다.
+   당시 목표를 BLOCKED로 전환했다. 2026-09-22 사용자가 GitHub 직접 취득 실행을 재지시하고
+   4090 또는 3090 사용을 명시적으로 허용했다. 팀명/팀원은 미제공을 유지한다.
    재고 API의 LOW 표시와 실제 배정 가능 여부는 다르다. 동일 조건의 무근거 재시도는 하지 않는다.
    목표가 허용한 동급 이상 단일 GPU 대안으로 5090 32GB의 명시적 hardware/doctor guard를 추가했다.
    CPU 단위검사 41개·Ruff·mypy·shell syntax PASS. 평가 조건 변경이나 추가 로컬 추론은 없다.
-   원래 운영 상한7.5시간 전에 중단했다. 과금 API는 아직 해당 사용내역을 반환하지 않으므로 비용0으로 쓰지 않는다.
+   원래 운영 상한7.5시간 전에 중단했다. 청구 조회에서 이전 Pod GPU+디스크 합계 $0.1447284467 확인.
+   재개 전 Pod/Network Volume 모두0 확인. 3090은 표시 재고 MEDIUM, Community $0.22/h;
+   3090 명시적 profile/실제 장비 검사를 추가하되 공통 평가 조건과 dependency lock은 바꾸지 않는다.
+   3090 추가 후 CPU42/Ruff/mypy/shell syntax 및 FROZEN/GPU-only profile 검사 PASS. 추가 로컬 추론 없음.
    총 상한$6.80은 유지하며 재개 시 이미 사용한 비용·보존비·회수 여유를 먼저 차감한다.
 7. 무료 준비: Accounting30 종료·사후 검증 후 외부 setup/runpod-prep.DK1IeD의
    검증된 19개 파일을 원본에 통합했다. A/B role·Git SHA·개별 추론 호출 기록·공유 이미지,
@@ -155,12 +159,12 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
 1. Accounting30 종료·사후 검사 완료. 원본 결과 보존, 재추론하지 않음.
 2. 격리 준비본 통합·CPU 검사·주관식/다중 이미지 3개 검증 완료. 추가 로컬 추론 없음.
    build_messages가 run_dir/prompts 사본을 쓰는 보완도 포함하며 P0는 바꾸지 않는다.
-3. 5090 명시적 프로필/장비 guard CPU 검사·고정 commit 게시·clean clone/설치 완료; 호스트 CUDA 실패.
+3. 3090 명시적 프로필/장비 검사 CPU 검증·새 고정 commit 게시. 이전 5090은 호스트 CUDA 실패로 정리 완료.
    기존 실행 commit의 깨끗한 별도 local worktree를 보관했다. 최종 bundle 검증에는 실제 실행 SHA의 worktree를 쓴다.
-4. 재고/호스트 상태 변경 또는 새 지시 후만 재시도. 대여 직후 libcuda cuInit/UVM 열기부터 확인하여 설치 낭비를 막는다.
+4. 사용자의 재개 지시에 따라 4090/3090을 사용한다. 대여 직후 libcuda cuInit/UVM 열기부터 확인하여 설치 낭비를 막는다.
    삭제된 Pod는 --resume하지 않는다. 정상 새 Pod/남은 예산/독립 watchdog을 확인한 뒤 README의 clone 명령을
-   MMDL_CODE_COMMIT=08e00ca802bb25f6915464df1f29ceb17b7eaa7e,
-   MMDL_JOB_ID=mmdl-val-20260922-retry 및 --hardware configs/hardware/rtx5090_32gb.yaml로 실행한다.
+   MMDL_CODE_COMMIT에는 새 게시 전체 SHA, MMDL_JOB_ID=mmdl-val-20260922-3090,
+   --hardware configs/hardware/rtx3090_24gb.yaml을 지정한다(4090 배정 시 대응 profile 사용).
    doctor·최소 smoke·A900→B900·검증/포장/회수/삭제가 남았다.
-전체 protocol은 FROZEN이다. 상태는 PROVIDER_BLOCKED/NO_ACTIVE_PAID_RESOURCES.
+전체 protocol은 FROZEN이다. 상태는 RESUMING_PREPARATION/NO_ACTIVE_PAID_RESOURCES.
 A/B·전체 결과 로컬 회수·실측 보고서·최종 CLEANUP_VERIFIED는 아직 달성하지 않았다.
