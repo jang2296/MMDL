@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -16,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 OFFICIAL_SCORE = 67.4
+FINAL_PROTOCOL_ID = "mmmu-val-fast-vllm-32k-v1"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -30,6 +32,15 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Expected YAML mapping: {path}")
     return value
+
+
+def _validate_final_protocol(cfg: dict[str, Any]) -> None:
+    execution = cfg.get("execution", {})
+    if (cfg.get("protocol_id") != FINAL_PROTOCOL_ID
+            or cfg.get("generation", {}).get("max_new_tokens") != 32768
+            or execution.get("backend") != "vllm"
+            or execution.get("batch_size") != 2):
+        raise ValueError("Assignment report accepts only the frozen 32k vLLM submission protocol")
 
 
 def _config_path(run_dir: Path, manifest: dict[str, Any]) -> Path:
@@ -67,6 +78,7 @@ def _hardware_path(run_dir: Path, manifest: dict[str, Any]) -> Path | None:
 def _seconds(value: Any) -> str:
     if value is None:
         return "미제공"
+    assert value is not None
     return f"{float(value):.3f} s"
 
 
@@ -89,6 +101,7 @@ def _load_complete_run(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], d
         raise ValueError("The analysis run must never supply the Assignment submission score")
     cfg_path = _config_path(run_dir, manifest)
     cfg = _read_yaml(cfg_path)
+    _validate_final_protocol(cfg)
     if summary.get("status") != "COMPLETE" or str(summary.get("mode", "")).lower() != "full":
         raise ValueError("Report generation requires a COMPLETE full run")
     if summary.get("expected_count") != 900 or summary.get("completed_count") != 900:
@@ -117,8 +130,15 @@ def _load_complete_run(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], d
         raise ValueError("Independent subject count is not 30 for each configured subject")
     correct = sum(row.get("correct") is True for row in rows)
     macro = correct / 900
-    if summary.get("correct") != correct or not math.isclose(float(summary.get("macro_average")), macro, abs_tol=1e-12):
+    reported_macro = summary.get("macro_average")
+    if reported_macro is None or summary.get("correct") != correct or not math.isclose(float(reported_macro), macro, abs_tol=1e-12):
         raise ValueError("Summary score does not match independent row arithmetic")
+    public_dir = run_dir.parent.parent / "public" / run_dir.name
+    try:
+        from scripts.validate_run import validate
+        validate(run_dir, public_dir)
+    except (AssertionError, FileNotFoundError, KeyError, ValueError) as exc:
+        raise ValueError(f"Report generation requires an independent recovered-run audit: {exc}") from exc
     return summary, environment, backend, manifest, cfg, rows, subjects
 
 
@@ -256,7 +276,7 @@ def _gap_analysis(rows: list[dict[str, Any]], cfg: dict[str, Any]) -> str:
     return text
 
 
-def render(run_dir: Path, output: Path) -> None:
+def _legacy_render(run_dir: Path, output: Path) -> None:
     summary, environment, backend, manifest, cfg, rows, subjects = _load_complete_run(run_dir)
     model = cfg.get("model", {})
     generation = cfg.get("generation", {})
@@ -278,18 +298,26 @@ def render(run_dir: Path, output: Path) -> None:
         f"download verification (separate) {_download_text()}"
     )
     packages = environment.get("packages", {})
-    backend_version = packages.get("transformers", "미제공") if isinstance(packages, dict) else "미제공"
+    backend_name = execution.get("backend", "transformers")
+    backend_version = (backend.get("vllm", {}).get("version", "미제공") if backend_name == "vllm"
+                       else packages.get("transformers", "미제공"))
     peak_vram = (
         f"reserved {_bytes_gib(summary.get('peak_vram_reserved_bytes'))}; "
         f"allocated {_bytes_gib(summary.get('peak_vram_allocated_bytes'))}"
     )
+    if backend_name == "vllm":
+        peak_vram += ("; worker allocator peak 미계측; 최대 batch 후 device snapshot "
+                      f"{_bytes_gib(summary.get('max_observed_device_memory_used_bytes'))} (true peak 아님)")
     peak_ram = _bytes_gib(summary.get("peak_ram_rss_bytes"))
+    if backend_name == "vllm":
+        peak_ram += " (parent process만; worker RSS 제외)"
     command = _command(run_dir, manifest, cfg_path)
     rows_md = "\n".join(
         f"| {index} | {subject} | 30 | {_percent(sum(row.get('correct') is True for row in by_subject[subject]) / 30)} |"
         for index, subject in enumerate(subjects, 1)
     )
-    package_link = "[env/requirements-eval.lock](../env/requirements-eval.lock)"
+    lock_name = "requirements-vllm.lock" if backend_name == "vllm" else "requirements-eval.lock"
+    package_link = f"[env/{lock_name}](../env/{lock_name})"
     report = f'''# MMMU-val Baseline Evaluation Report — Qwen3-VL-4B-Instruct
 
 - **팀명**: 미제공
@@ -304,7 +332,7 @@ Run status: **COMPLETE900**. Independent audit: 900 unique completed rows, 30 su
 | 항목 | 값 |
 |---|---|
 | 모델 checkpoint | `{model.get('id', '미제공')}` (`{model.get('revision', '미제공')}`), dtype=`{model.get('dtype', '미제공')}` |
-| 추론 백엔드 | `{execution.get('backend', '미제공')}`, transformers `{backend_version}` |
+| 추론 백엔드 | `{backend_name}` `{backend_version}`, batch `{execution.get('batch_size')}`, attention `{execution.get('attention')}` / `{execution.get('sdpa_kernel')}` |
 | 사용 GPU | {_gpu_text(environment)} |
 | 실측 peak VRAM | {peak_vram} |
 | 실측 peak RAM (process RSS) | {peak_ram} |
@@ -342,7 +370,7 @@ Hint policy: non-empty sanitized source `hint` is rendered as `Hint: {{hint}}\\n
 | `top_p` | {generation.get('top_p', '미제공')} |
 | `top_k` | {generation.get('top_k', '미제공')} |
 | `repetition_penalty` | {generation.get('repetition_penalty', '미제공')} |
-| `presence_penalty` | {generation.get('presence_penalty', '미제공')} (generated-only custom; backend record: {backend.get('presence_penalty', {}).get('implementation', '미제공')}) |
+| `presence_penalty` | {generation.get('presence_penalty', '미제공')} (generated-only; backend record: {backend.get('presence_penalty', {}).get('implementation', '미제공')}) |
 | `seed` | master `{generation.get('seed', '미제공')}`, policy `{generation.get('seed_policy', '미제공')}` |
 
 - **출처**: Qwen3-VL repository `README.md`의 Evaluation Reproduction recipe; seed policy is the team protocol and is recorded separately from the reference script seed.
@@ -374,7 +402,7 @@ Hint policy: non-empty sanitized source `hint` is rendered as `Hint: {{hint}}\\n
 
 | | Overall (MMMU val) |
 |---|---|
-| 공식 (Qwen3-VL Technical Report) | 67.4 |
+| 수업이 제시한 공식 비교값 | 67.4 |
 | 우리 재현 결과 | {actual_accuracy * 100:.2f} |
 | 차이 (Δ) | {delta:+.2f} percentage points |
 
@@ -392,12 +420,163 @@ Hint policy: non-empty sanitized source `hint` is rendered as `Hint: {{hint}}\\n
     output.write_text(report, encoding="utf-8")
 
 
+_DYNAMIC = re.compile(
+    r"(<!-- REPORT_DYNAMIC:BEGIN -->\n)(.*?)(<!-- REPORT_DYNAMIC:END -->)", re.DOTALL
+)
+_RUNTIME = re.compile(
+    r"(<!-- REPORT_RUNTIME:BEGIN -->\n)(.*?)(<!-- REPORT_RUNTIME:END -->)", re.DOTALL
+)
+_STATUS = re.compile(
+    r"(<!-- REPORT_STATUS:BEGIN -->\n)(.*?)(<!-- REPORT_STATUS:END -->)", re.DOTALL
+)
+
+
+def _sampled_device_memory(run_dir: Path, manifest: dict[str, Any], backend_name: str) -> str:
+    if backend_name != "vllm":
+        return "vLLM worker 장치 메모리 샘플 대상 아님"
+    identity = manifest.get("identity", {})
+    job_id = identity.get("job_id") if isinstance(identity, dict) else None
+    role = identity.get("run_role") if isinstance(identity, dict) else None
+    if not isinstance(job_id, str) or not isinstance(role, str):
+        return "미측정: run manifest에 job_id/run_role이 없어 job-level device memory를 연결할 수 없음"
+    job_path = run_dir.parent.parent / "jobs" / f"{job_id}.json"
+    if not job_path.is_file():
+        return "미측정: 회수된 job manifest가 없어 vLLM worker allocator 밖 장치 메모리를 확인할 수 없음"
+    job = _read_json(job_path)
+    stages = job.get("stages", [])
+    matches = [stage for stage in stages if isinstance(stage, dict) and stage.get("run_role") == role]
+    values = [float(stage["peak_observed_device_memory_used_bytes"]) for stage in matches
+              if isinstance(stage.get("peak_observed_device_memory_used_bytes"), (int, float))]
+    if not values:
+        return "미측정: 이 role의 900-run device memory sampling record가 없음"
+    stage = next(stage for stage in matches if stage.get("peak_observed_device_memory_used_bytes") == max(values))
+    interval = stage.get("gpu_memory_sample_interval_ms", "미제공")
+    samples = stage.get("gpu_memory_sample_count", stage.get("sample_count", "미제공"))
+    scope = stage.get("memory_scope", "미제공")
+    return (
+        f"{_bytes_gib(max(values))}; source=job stage `{stage.get('stage', '미제공')}`, "
+        f"{interval} ms 간격 {samples}회, scope=`{scope}`. CUDA/vLLM allocator peak가 아니라 "
+        "해당 single-GPU device의 sampled used-memory 관측 최대치이며 driver/other process overhead를 포함할 수 있다."
+    )
+
+
+def _runtime_metrics(summary: dict[str, Any], environment: dict[str, Any], backend: dict[str, Any],
+                     manifest: dict[str, Any], cfg: dict[str, Any], run_dir: Path) -> str:
+    execution = cfg["execution"]
+    backend_name = execution["backend"]
+    version = backend.get("vllm", {}).get("version", "미제공") if backend_name == "vllm" else environment.get("packages", {}).get("transformers", "미제공")
+    return (
+        "### COMPLETE900 실행 실측\n\n"
+        f"- backend: `{backend_name}` `{version}`, batch `{execution['batch_size']}`; GPU: {_gpu_text(environment)}\n"
+        f"- effective generation record: `{backend.get('generation_config', '미제공')}`\n"
+        f"- evaluation loop: {_seconds(summary.get('evaluation_seconds_this_invocation'))}; "
+        f"model load: {_seconds(summary.get('model_load_seconds'))}; total invocation: {_seconds(summary.get('total_seconds_this_invocation'))}\n"
+        f"- GPU memory: {_sampled_device_memory(run_dir, manifest, backend_name)}\n"
+    )
+
+
+def _status_metrics(summary: dict[str, Any], manifest: dict[str, Any], run_dir: Path) -> str:
+    identity = manifest.get("identity", {})
+    job_id = identity.get("job_id", "미제공") if isinstance(identity, dict) else "미제공"
+    role = identity.get("run_role", "미제공") if isinstance(identity, dict) else "미제공"
+    command = _command(run_dir, manifest)
+    return (
+        f"- **제출 상태**: `COMPLETE900` 독립 검증 완료; job `{job_id}`, role `{role}`, "
+        f"900/900 completed, denominator `{summary.get('denominator')}`.\n"
+        f"- **재현 명령**: `{command}`\n"
+    )
+
+
+def _dynamic_results(rows: list[dict[str, Any]], subjects: list[str], cfg: dict[str, Any]) -> str:
+    by_subject = {subject: [row for row in rows if row.get("subject") == subject] for subject in subjects}
+    correct = sum(row.get("correct") is True for row in rows)
+    accuracy = correct / 900
+    table = "\n".join(
+        f"| {index} | {subject} | 30 | {_percent(sum(row.get('correct') is True for row in by_subject[subject]) / 30)} |"
+        for index, subject in enumerate(subjects, 1)
+    )
+    no_parse = sum(row.get("parse_status") == "NO_PARSE" for row in rows)
+    empty = sum(row.get("parse_status") == "EMPTY" for row in rows)
+    length = sum(row.get("finish_reason") == "length" for row in rows)
+    backend = cfg["execution"]["backend"]
+    diagnosis = (
+        f"관측값: NO_PARSE {no_parse}개, EMPTY {empty}개, length 종료 {length}개이며, "
+        f"이 run의 backend는 {backend}, max_new_tokens는 {cfg['generation']['max_new_tokens']}이다. "
+        "이 값들은 공식 67.4와의 차이를 설명할 후보 관측치일 뿐 인과를 증명하지 않는다. "
+        "프롬프트/processor/revision/seed 정책, 생성 길이, parser와 runtime의 차이는 저장된 resolved config·raw response로만 검토한다."
+    )
+    if len(diagnosis) > 1000:
+        raise AssertionError("Gap diagnosis exceeded 1000 characters")
+    return f'''## 5. 결과
+
+| No. | Subject | Data Num | Acc |
+|---:|---|---:|---:|
+{table}
+|  | **Overall (macro avg)** | **900** | **{_percent(accuracy)}** |
+
+계산식: `mean(30개 과목 accuracy) = correct/900 = {correct}/900`.
+
+## 6. 공식 수치와의 비교
+
+| | Overall (MMMU validation) |
+|---|---:|
+| 수업이 제시한 공식 비교값 | 67.4 |
+| 우리 재현 결과 | {accuracy * 100:.2f} |
+| 차이 (Δ, percentage points) | {accuracy * 100 - OFFICIAL_SCORE:+.2f} |
+
+## 7. 격차 분석
+
+{diagnosis}
+'''
+
+
+def render(run_dir: Path, output: Path) -> None:
+    """Replace only the marked metrics in the authored Korean submission report."""
+    summary, environment, backend, manifest, cfg, rows, subjects = _load_complete_run(run_dir)
+    template = (ROOT / "Assignment_1.md").read_text(encoding="utf-8")
+    report, count = _DYNAMIC.subn(
+        lambda match: match.group(1) + _dynamic_results(rows, subjects, cfg) + match.group(3), template
+    )
+    if count != 1:
+        raise ValueError("Assignment_1.md must contain exactly one dynamic report marker")
+    report, count = _RUNTIME.subn(
+        lambda match: match.group(1) + _runtime_metrics(summary, environment, backend, manifest, cfg, run_dir) + match.group(3), report
+    )
+    if count != 1:
+        raise ValueError("Assignment_1.md must contain exactly one runtime report marker")
+    report, count = _STATUS.subn(
+        lambda match: match.group(1) + _status_metrics(summary, manifest, run_dir) + match.group(3), report
+    )
+    if count != 1:
+        raise ValueError("Assignment_1.md must contain exactly one status report marker")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(report, encoding="utf-8")
+
+
+def _sync_submission_mirror(report: str) -> None:
+    for path in (ROOT / "Assignment_1.md", ROOT / "reports/mmmu_baseline.md"):
+        path.write_text(report, encoding="utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-dir", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--sync-template", action="store_true",
+                        help="copy the authored pre-run template to the required report mirror")
     args = parser.parse_args()
-    render(args.run_dir.expanduser().resolve(), args.output.expanduser().resolve())
+    if args.sync_template:
+        if args.run_dir or args.output:
+            parser.error("--sync-template does not accept --run-dir or --output")
+        _sync_submission_mirror((ROOT / "Assignment_1.md").read_text(encoding="utf-8"))
+        print("Synchronized Assignment_1.md and reports/mmmu_baseline.md")
+        return
+    if args.run_dir is None or args.output is None:
+        parser.error("--run-dir and --output are required unless --sync-template is used")
+    output = args.output.expanduser().resolve()
+    render(args.run_dir.expanduser().resolve(), output)
+    report = output.read_text(encoding="utf-8")
+    _sync_submission_mirror(report)
     print(f"Wrote {args.output}")
 
 

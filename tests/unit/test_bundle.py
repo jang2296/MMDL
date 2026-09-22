@@ -14,15 +14,19 @@ from mmdl.runtime.artifacts import sha256_file
 
 
 class BundleTests(unittest.TestCase):
-    def _roots(self, base: Path) -> tuple[Path, Path]:
+    def _roots(self, base: Path, *, suite: str | None = None) -> tuple[Path, Path]:
         artifacts, public = base / "artifacts", base / "public"
-        for role in ("assignment", "analysis"):
+        roles = ("assignment", "analysis") if suite is None else (suite.removeprefix("mmmu-val-"),)
+        for role in roles:
             (artifacts / "runs" / f"job-{role}").mkdir(parents=True)
             (public / f"job-{role}").mkdir(parents=True)
             (artifacts / "runs" / f"job-{role}" / "summary.json").write_text("{}")
             (public / f"job-{role}" / "summary.json").write_text("{}")
         (artifacts / "jobs").mkdir()
-        (artifacts / "jobs" / "job.json").write_text("{}")
+        job = {"runs": {role: f"job-{role}" for role in roles}}
+        if suite is not None:
+            job |= {"schema_version": 2, "suite": suite}
+        (artifacts / "jobs" / "job.json").write_text(json.dumps(job))
         return artifacts, public
 
     def test_create_is_allowlisted_and_refuses_overwrite(self) -> None:
@@ -43,6 +47,31 @@ class BundleTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 with patch("mmdl.runtime.bundle._cross_run_checks", return_value={"status": "REMOTE_VERIFIED", "total_inference_records": 1800}):
                     create(artifacts, public, "job", archive)
+
+    def test_single_role_bundle_contains_only_the_explicit_suite_role(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifacts, public = self._roots(Path(temp), suite="mmmu-val-analysis")
+            archive = Path(temp) / "analysis.tar.gz"
+            evidence = {"status": "REMOTE_VERIFIED", "roles": ["analysis"],
+                        "total_inference_records": 900}
+            with patch("mmdl.runtime.bundle._cross_run_checks", return_value=evidence):
+                result = create(artifacts, public, "job", archive)
+            self.assertEqual(result["total_inference_records"], 900)
+            with tarfile.open(archive, "r:gz") as stream:
+                manifest, _ = _manifest_from_archive(stream)
+            self.assertEqual(manifest["schema"], "mmdl-runpod-bundle-v2")
+            self.assertEqual(manifest["roles"], ["analysis"])
+            self.assertEqual(manifest["runs"], {"analysis": "job-analysis"})
+
+    def test_schema_v2_rejects_missing_or_extra_suite_roles(self) -> None:
+        for runs in ({}, {"analysis": "job-analysis", "assignment": "job-assignment"}):
+            with self.subTest(runs=runs), tempfile.TemporaryDirectory() as temp:
+                artifacts, public = self._roots(Path(temp), suite="mmmu-val-analysis")
+                (artifacts / "jobs" / "job.json").write_text(json.dumps({
+                    "schema_version": 2, "suite": "mmmu-val-analysis", "runs": runs,
+                }))
+                with self.assertRaisesRegex(ValueError, "exact suite run roles"):
+                    create(artifacts, public, "job", Path(temp) / "bundle.tar")
 
     def test_forbidden_model_cache_entry_is_not_packable(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -117,6 +146,49 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(cleanup_targets(receipt, ledger, "pod-1")["network_volume_ids"], ["volume-1"])
         ledger["network_volumes"][0]["shared"] = True
         with self.assertRaisesRegex(ValueError, "shared"):
+            cleanup_targets(receipt, ledger, "pod-1")
+
+    def test_legacy_create_verify_receipt_remains_cleanup_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            artifacts, public = self._roots(base)
+            archive = base / "legacy.tar.gz"
+            roles = ["assignment", "analysis"]
+            evidence = {"status": "REMOTE_VERIFIED", "bundle_schema": "mmdl-runpod-bundle-v1",
+                        "suite": "mmmu-val-two-runs", "roles": roles, "pod_id": "pod-1",
+                        "total_inference_records": 1800,
+                        **{role: {"run_id": f"job-{role}", "count": 900} for role in roles}}
+            with patch("mmdl.runtime.bundle._cross_run_checks", return_value=evidence):
+                create(artifacts, public, "job", archive)
+                receipt = verify(archive, sha256_file(archive), base / "recovered", base)
+            ledger = {"job_id": "job", "pod_id": "pod-1", "created_for_job": True,
+                      "preexisting_pod_ids": [], "preexisting_volume_ids": [], "network_volumes": []}
+            self.assertEqual(receipt["bundle_schema"], "mmdl-runpod-bundle-v1")
+            self.assertEqual(cleanup_targets(receipt, ledger, "pod-1")["pod_id"], "pod-1")
+
+    def test_cleanup_accepts_complete_single_role_but_rejects_another_pod(self) -> None:
+        evidence = {"roles": ["analysis"], "total_inference_records": 900,
+                    "analysis": {"run_id": "job-1-analysis", "count": 900}}
+        receipt = {"status": "LOCAL_VERIFIED", "bundle_schema": "mmdl-runpod-bundle-v2",
+                   "suite": "mmmu-val-analysis", "roles": ["analysis"],
+                   "expected_inference_records": 900, "job_id": "job-1", "pod_id": "pod-1",
+                   "runs": evidence}
+        ledger = {"job_id": "job-1", "pod_id": "pod-1", "created_for_job": True,
+                  "preexisting_pod_ids": [], "preexisting_volume_ids": [], "network_volumes": []}
+        self.assertEqual(cleanup_targets(receipt, ledger, "pod-1")["pod_id"], "pod-1")
+        with self.assertRaisesRegex(ValueError, "bind the requested Pod"):
+            cleanup_targets(receipt, ledger, "old-pod")
+
+    def test_cleanup_rejects_single_role_count_mismatch(self) -> None:
+        evidence = {"roles": ["analysis"], "total_inference_records": 899,
+                    "analysis": {"run_id": "job-1-analysis", "count": 899}}
+        receipt = {"status": "LOCAL_VERIFIED", "bundle_schema": "mmdl-runpod-bundle-v2",
+                   "suite": "mmmu-val-analysis", "roles": ["analysis"],
+                   "expected_inference_records": 900, "job_id": "job-1", "pod_id": "pod-1",
+                   "runs": evidence}
+        ledger = {"job_id": "job-1", "pod_id": "pod-1", "created_for_job": True,
+                  "preexisting_pod_ids": [], "preexisting_volume_ids": [], "network_volumes": []}
+        with self.assertRaisesRegex(ValueError, "exact complete suite roles"):
             cleanup_targets(receipt, ledger, "pod-1")
 
 

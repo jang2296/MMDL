@@ -50,3 +50,40 @@ The installed [Transformers model implementation](https://github.com/huggingface
 [Accelerate CPU inference offload](https://huggingface.co/docs/accelerate/concept_guides/big_model_inference) supplies placement hooks, not a peak-VRAM guarantee or training support. The image processor alone owns resize; this Transformers path does not call qwen_vl_utils for another resize. Transformers4.57.1 has no native presence penalty; the custom generated-only processor subtracts 1.5 once per seen generated token, before temperature/top-k/top-p, verified against its actual processor dispatch.
 
 Future adapter evaluation uses [PEFT from_pretrained](https://huggingface.co/docs/peft/v0.17.0/en/package_reference/peft_model#from_pretrained), inference-only with adapter dtype autocast disabled. This neither trains nor establishes a validated trained checkpoint. Full/merged weights retain the original architecture and processor.
+
+## Acceleration protocol (2026-09-22)
+
+Course S1 §1.3 permits a documented inference backend; §5 explicitly encourages batching/vLLM.
+Batch1/SDPA math was a team reference design, not a course restriction. The new user-approved
+fast protocols retain model/revision/BF16, 900 IDs, P0, image budgets, generation settings and scoring.
+They have separate protocol/code hashes and cannot resume or merge a reference run.
+
+The user subsequently approved the official Instruct `out_seq_length=32768` for the new
+`mmmu-val-fast-vllm-32k-v1`, after the old Accounting30 showed15 length-terminated outputs.
+The old2048 budget and completed local fast smoke remain historical evidence only.
+The engine's total context36864 is a separate capacity choice, not the output cap.
+A pinned-processor CPU-only scan of all900 inputs found a maximum2655 tokens
+(`validation_Psychology_21`);32768+2655=35423 fits without input truncation.
+The pinned model's36 layers,8 KV heads,128 head dimension and BF16 require144KiB KV/token:
+two full36864 contexts consume about10.125GiB KV, excluding weights/vision/workspace.
+This capacity calculation is not a GPU memory measurement or an OOM-free guarantee.
+The engine rejects overlength inputs rather than silently truncating them.
+The official processor example itself uses256–1280 visual tokens per image, corresponding
+to the retained262144–1310720 pixel bounds at32×32 spatial compression. This is an example
+budget, not a course-mandated value or the official MMMU script's larger28-based setting.
+
+[PyTorch2.8 SDPA](https://docs.pytorch.org/docs/2.8/generated/torch.nn.functional.scaled_dot_product_attention.html)
+can select optimized kernels; math keeps half/BF16 intermediates in float32. The local fast path
+allows native selection and removes the progress streamer, without claiming a measured speedup yet.
+
+[vLLM0.11.0 supported models](https://docs.vllm.ai/en/v0.11.0/models/supported_models.html)
+includes Qwen3-VL. Its [release dependencies](https://pypi.org/pypi/vllm/0.11.0/json) match Torch2.8,
+while the separate lock handles NumPy/Numba and setuptools restrictions. Version0.11.1 instead
+requires Torch2.9, so it is not substituted into the old environment.
+The [tagged sampler](https://github.com/vllm-project/vllm/blob/v0.11.0/vllm/v1/sample/sampler.py)
+applies penalties before temperature/top-k/top-p. Request-specific `SamplingParams.seed` is the
+same team-derived seed value, not a claim that vLLM and Transformers consume identical random numbers.
+Async scheduling and prefix caching are explicitly disabled; the
+[Qwen recipe](https://github.com/vllm-project/recipes/blob/main/Qwen/Qwen3-VL.md) warning about
+improved penalty compatibility in0.11.1 concerns async scheduling. Eager execution avoids graph
+capture startup/memory overhead for this short-lived batch2 job; actual throughput must be measured.

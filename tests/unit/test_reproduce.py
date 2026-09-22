@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 from mmdl.runtime.artifacts import read_json
 from mmdl.runtime.reproduce import (
+    _gpu_sample_metrics,
     _validate_doctor_gpu,
     _validate_hardware_profile,
     _validate_origin,
+    _smoke_sample_ids,
     arguments,
     execute,
     main,
@@ -20,6 +22,17 @@ from mmdl.runtime.reproduce import (
 
 
 class ReproduceTests(unittest.TestCase):
+    def test_gpu_samples_record_observed_whole_device_peak(self):
+        with tempfile.TemporaryDirectory() as temp:
+            samples = Path(temp) / "stage.log.gpu.csv"
+            samples.write_text("2026/09/22 10:00:00.000, 1000, 10\n"
+                               "2026/09/22 10:00:00.500, 1234, 90\ninvalid\n")
+            metrics = _gpu_sample_metrics(samples)
+            self.assertEqual(metrics["peak_observed_device_memory_used_bytes"], 1234 * 1024**2)
+            self.assertEqual(metrics["gpu_memory_sample_count"], 2)
+            self.assertEqual(metrics["gpu_memory_sample_interval_ms"], 500)
+            self.assertEqual(metrics["memory_scope"], "whole_device_sampled_not_allocator_peak")
+
     def test_default_is_side_effect_free_dry_run(self):
         output = io.StringIO()
         with patch("mmdl.runtime.reproduce.execute") as execute, contextlib.redirect_stdout(output):
@@ -32,6 +45,15 @@ class ReproduceTests(unittest.TestCase):
             with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     arguments(["--job-id", "fixture", "--commit", "a" * 40] + extra)
+
+    def test_accelerated_suites_are_accepted(self):
+        for suite in ("mmmu-val-analysis", "mmmu-val-assignment"):
+            self.assertEqual(arguments(["--job-id", "fixture", "--commit", "a" * 40,
+                                        "--suite", suite]).suite, suite)
+
+    def test_smoke_ids_match_backend_batch_policy(self):
+        self.assertEqual(_smoke_sample_ids("transformers"), ["validation_Accounting_1"])
+        self.assertEqual(_smoke_sample_ids("vllm"), ["validation_Accounting_1", "validation_Biology_29"])
 
     def test_origin_and_profile_are_currently_team_and_approved_gpu_only(self):
         for origin in (
@@ -126,6 +148,19 @@ class ReproduceTests(unittest.TestCase):
             deadline = datetime.now(timezone.utc) + timedelta(hours=1)
             interrupted = True
 
+            class Monitor:
+                def poll(self):
+                    return None
+
+                def terminate(self):
+                    raise ProcessLookupError("already exited")
+
+                def wait(self, timeout=None):
+                    return 0
+
+                def kill(self):
+                    pass
+
             def mock_executable(command, **kwargs):
                 nonlocal interrupted
                 if interrupted:
@@ -152,10 +187,12 @@ class ReproduceTests(unittest.TestCase):
                 "MMDL_WATCHDOG_ID": "watchdog-fixture",
                 "MMDL_STORAGE_RESERVE_GIB": "10",
             }), patch("mmdl.runtime.reproduce.git_commit"), \
+                    patch("mmdl.runtime.reproduce._preflight_gpu", return_value={"gpu_name": "fixture", "driver_version": "fixture", "container_image": None}), \
                     patch("mmdl.runtime.reproduce.require_runtime",
                           return_value=(paths, deadline, 1.0)), \
                     patch("mmdl.runtime.reproduce.subprocess.check_output",
                           return_value="https://github.com/jang2296/MMDL.git"), \
+                    patch("mmdl.runtime.reproduce.subprocess.Popen", return_value=Monitor()), \
                     patch("mmdl.runtime.reproduce.subprocess.run", side_effect=mock_executable):
                 with self.assertRaises(KeyboardInterrupt):
                     execute(arguments(common), root)
@@ -167,6 +204,11 @@ class ReproduceTests(unittest.TestCase):
             self.assertEqual(job["status"], "REMOTE_VERIFIED")
             self.assertEqual(job["stages"][0]["log"], "fixture.001-venv.log")
             self.assertNotEqual(job["stages"][0]["log"], "fixture.000-venv.log")
+            smoke = next(stage for stage in job["stages"] if stage["stage"] == "smoke")
+            self.assertIsNone(smoke["peak_observed_device_memory_used_bytes"])
+            self.assertEqual(smoke["gpu_memory_sample_count"], 0)
+            self.assertIn("cleanup failed", smoke["gpu_memory_monitor_diagnostic"])
+            self.assertNotIn("gpu_memory_sample_count", job["stages"][0])
 
 
 if __name__ == "__main__":

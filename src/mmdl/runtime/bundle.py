@@ -1,4 +1,4 @@
-"""Create and locally verify a closed, portable RunPod A/B artifact bundle."""
+"""Create and locally verify a closed, portable RunPod evaluation bundle."""
 
 from __future__ import annotations
 
@@ -22,6 +22,11 @@ from mmdl.runtime.environment import check_storage
 
 _MANIFEST = "bundle_manifest.json"
 _ROLES = ("assignment", "analysis")
+_SUITE_ROLES = {
+    "mmmu-val-two-runs": _ROLES,
+    "mmmu-val-assignment": ("assignment",),
+    "mmmu-val-analysis": ("analysis",),
+}
 _JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,60}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _FORBIDDEN_PARTS = frozenset({"model", "models", "venv", "venvs", "hf", "huggingface", "cache", "caches",
@@ -127,23 +132,46 @@ def _publish_exclusive(path: Path, source: Path) -> None:
         os.close(directory)
 
 
+def _job_contract(job_id: str, metadata: dict[str, Any]) -> tuple[str, str, tuple[str, ...], dict[str, str]]:
+    """Resolve legacy paired jobs or the explicit role set of schema-v2 jobs."""
+    version = metadata.get("schema_version")
+    schema: str
+    suite: str
+    roles: tuple[str, ...]
+    if version is None:
+        schema, suite, roles = "mmdl-runpod-bundle-v1", "mmmu-val-two-runs", _ROLES
+    elif version == 2:
+        suite_value = metadata.get("suite")
+        if not isinstance(suite_value, str) or suite_value not in _SUITE_ROLES:
+            raise ValueError("Schema-v2 job has an unsupported evaluation suite")
+        suite = suite_value
+        schema, roles = "mmdl-runpod-bundle-v2", _SUITE_ROLES[suite]
+    else:
+        raise ValueError("Unsupported job metadata schema")
+    runs = {role: f"{job_id}-{role}" for role in roles}
+    if metadata.get("runs") != runs:
+        raise ValueError("Job metadata does not bind the exact suite run roles")
+    return schema, suite, roles, runs
+
+
 def create(artifact_root: Path, public_root: Path, job_id: str, output: Path,
            repository: Path | None = None) -> dict[str, Any]:
-    """Build one no-symlink archive for exactly the supplied A/B job."""
+    """Build one no-symlink archive for exactly the roles bound to the job."""
     artifact_root, public_root, output = map(Path, (artifact_root, public_root, output))
     if not _JOB_ID.fullmatch(job_id):
         raise ValueError("Job ID is unsafe")
     if output.exists() or output.is_symlink() or output.with_suffix(output.suffix + ".sha256").exists():
         raise FileExistsError(f"Refusing to overwrite bundle output: {output}")
+    job_file = artifact_root / "jobs" / f"{job_id}.json"
+    if not job_file.is_file() or job_file.is_symlink():
+        raise FileNotFoundError(f"Exact job metadata is required: {job_file}")
+    job_metadata = read_json(job_file)
+    schema, suite, roles, run_names = _job_contract(job_id, job_metadata)
     entries: dict[str, Path] = {}
-    run_names = {role: f"{job_id}-{role}" for role in _ROLES}
     for role, run_name in run_names.items():
         run_dir = artifact_root / "runs" / run_name
         _add_tree(entries, run_dir, PurePosixPath("runs") / run_name)
         _add_tree(entries, public_root / run_name, PurePosixPath("public") / run_name)
-    job_file = artifact_root / "jobs" / f"{job_id}.json"
-    if not job_file.is_file() or job_file.is_symlink():
-        raise FileNotFoundError(f"Exact job metadata is required: {job_file}")
     entries[f"jobs/{job_id}.json"] = job_file
     for directory, prefix in ((artifact_root / "jobs", "jobs"), (artifact_root / "setup", "setup")):
         if not directory.is_dir() or directory.is_symlink():
@@ -167,7 +195,7 @@ def create(artifact_root: Path, public_root: Path, job_id: str, output: Path,
         {"path": name, "bytes": path.stat().st_size, "sha256": sha256_file(path)}
         for name, path in sorted(entries.items())
     ]
-    manifest = {"schema": "mmdl-runpod-bundle-v1", "job_id": job_id, "runs": run_names,
+    manifest = {"schema": schema, "job_id": job_id, "suite": suite, "roles": list(roles), "runs": run_names,
                 "remote_verification": remote_evidence, "files": files}
     manifest_bytes = (json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +255,9 @@ def _manifest_from_archive(archive: tarfile.TarFile) -> tuple[dict[str, Any], di
     if stream is None:
         raise ValueError("Bundle manifest is unreadable")
     manifest = json.loads(stream.read())
-    if not isinstance(manifest, dict) or manifest.get("schema") != "mmdl-runpod-bundle-v1":
+    if not isinstance(manifest, dict) or manifest.get("schema") not in {
+        "mmdl-runpod-bundle-v1", "mmdl-runpod-bundle-v2"
+    }:
         raise ValueError("Unsupported bundle manifest")
     listed = manifest.get("files")
     if not isinstance(listed, list):
@@ -278,19 +308,17 @@ def _cross_run_checks(artifact_root: Path, public_root: Path, job_id: str,
         raise ValueError("Job ID is unsafe")
     job_path = artifact_root / "jobs" / f"{job_id}.json"
     job_metadata = read_json(job_path)
+    schema, suite, roles, runs = _job_contract(job_id, job_metadata)
     pod_id = job_metadata.get("pod_id")
     if (job_metadata.get("job_id") != job_id or job_metadata.get("status") != "REMOTE_VERIFIED"
             or job_metadata.get("logs_closed") is not True or not isinstance(pod_id, str) or not pod_id):
         raise ValueError("Exact job metadata is not remotely verified with closed logs")
-    runs = {role: f"{job_id}-{role}" for role in _ROLES}
-    if job_metadata.get("runs") != runs:
-        raise ValueError("Job metadata does not bind both exact A/B run IDs")
     evidence: dict[str, Any] = {}
     identities: dict[str, dict[str, Any]] = {}
     id_sets: dict[str, set[str]] = {}
     invocation_sets: dict[str, set[str]] = {}
     inference_sets: dict[str, set[str]] = {}
-    for role in _ROLES:
+    for role in roles:
         run_name = runs[role]
         run_dir, public_dir = artifact_root / "runs" / run_name, public_root / run_name
         validation = validate(run_dir, public_dir)
@@ -323,18 +351,21 @@ def _cross_run_checks(artifact_root: Path, public_root: Path, job_id: str,
         evidence[role] = {"run_id": run_name, "identity": identity, "count": len(rows),
                           "viewer": str((run_dir / "review.html").relative_to(artifact_root)),
                           "validation": validation}
-    for key in ("protocol_sha256", "model_sha256", "code_sha256", "environment_sha256", "hardware"):
-        if identities["assignment"].get(key) != identities["analysis"].get(key):
-            raise ValueError(f"A/B identity differs: {key}")
-    if id_sets["assignment"] != id_sets["analysis"]:
-        raise ValueError("A/B expected sample IDs differ")
-    if inference_sets["assignment"] & inference_sets["analysis"]:
-        raise ValueError("A/B inference IDs overlap")
-    if invocation_sets["assignment"] & invocation_sets["analysis"]:
-        raise ValueError("A/B inference invocation IDs overlap")
-    if identities["assignment"].get("git_commit") != identities["analysis"].get("git_commit"):
-        raise ValueError("A/B Git commits differ")
-    return evidence | {"status": "REMOTE_VERIFIED", "pod_id": pod_id, "total_inference_records": 1800}
+    if roles == _ROLES:
+        for key in ("protocol_sha256", "model_sha256", "code_sha256", "environment_sha256", "hardware"):
+            if identities["assignment"].get(key) != identities["analysis"].get(key):
+                raise ValueError(f"A/B identity differs: {key}")
+        if id_sets["assignment"] != id_sets["analysis"]:
+            raise ValueError("A/B expected sample IDs differ")
+        if inference_sets["assignment"] & inference_sets["analysis"]:
+            raise ValueError("A/B inference IDs overlap")
+        if invocation_sets["assignment"] & invocation_sets["analysis"]:
+            raise ValueError("A/B inference invocation IDs overlap")
+        if identities["assignment"].get("git_commit") != identities["analysis"].get("git_commit"):
+            raise ValueError("A/B Git commits differ")
+    return evidence | {"status": "REMOTE_VERIFIED", "bundle_schema": schema, "suite": suite,
+                       "roles": list(roles), "pod_id": pod_id,
+                       "total_inference_records": 900 * len(roles)}
 
 
 def verify(archive_path: Path, expected_sha256: str, destination: Path, repository: Path) -> dict[str, Any]:
@@ -363,10 +394,21 @@ def verify(archive_path: Path, expected_sha256: str, destination: Path, reposito
                     raise ValueError(f"Unreadable archive member: {name}")
                 with target.open("xb") as output:
                     shutil.copyfileobj(stream, output)
-            evidence = _cross_run_checks(temporary, temporary / "public", manifest["job_id"], repository)
+            job_id = manifest.get("job_id")
+            if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
+                raise ValueError("Bundle manifest job ID is unsafe")
+            job_metadata = read_json(temporary / "jobs" / f"{job_id}.json")
+            schema, suite, roles, runs = _job_contract(job_id, job_metadata)
+            if (manifest.get("schema") != schema or manifest.get("runs") != runs
+                    or (schema == "mmdl-runpod-bundle-v2" and (
+                        manifest.get("suite") != suite or manifest.get("roles") != list(roles)))):
+                raise ValueError("Bundle manifest roles differ from exact job metadata")
+            evidence = _cross_run_checks(temporary, temporary / "public", job_id, repository)
             receipt = {"status": "LOCAL_VERIFIED", "archive": archive_path.name,
-                       "archive_sha256": actual, "job_id": manifest["job_id"],
-                       "pod_id": evidence["pod_id"], "runs": evidence}
+                       "archive_sha256": actual, "job_id": job_id,
+                       "pod_id": evidence["pod_id"], "bundle_schema": schema,
+                       "suite": suite, "roles": list(roles),
+                       "expected_inference_records": 900 * len(roles), "runs": evidence}
             write_json(temporary / "local_receipt.json", receipt)
             os.replace(temporary, destination)
             return receipt
@@ -383,8 +425,34 @@ def cleanup_targets(receipt: dict[str, Any], ledger: dict[str, Any], pod_id: str
     if not _JOB_ID.fullmatch(job_id or "") or receipt.get("pod_id") != pod_id:
         raise ValueError("Receipt does not bind the requested Pod to a safe job")
     runs = receipt.get("runs")
-    if not isinstance(runs, dict) or runs.get("total_inference_records") != 1800:
-        raise ValueError("Receipt does not prove both full A/B runs")
+    if not isinstance(runs, dict):
+        raise ValueError("Receipt does not prove complete evaluation runs")
+    bundle_schema = receipt.get("bundle_schema")
+    if bundle_schema is None:
+        if runs.get("total_inference_records") != 1800:
+            raise ValueError("Legacy receipt does not prove both full A/B runs")
+    elif bundle_schema == "mmdl-runpod-bundle-v1":
+        if (receipt.get("suite") != "mmmu-val-two-runs"
+                or receipt.get("roles") != list(_ROLES)
+                or receipt.get("expected_inference_records") != 1800
+                or runs.get("roles") != list(_ROLES)
+                or runs.get("total_inference_records") != 1800
+                or any(not isinstance(runs.get(role), dict)
+                       or runs[role].get("run_id") != f"{job_id}-{role}"
+                       or runs[role].get("count") != 900 for role in _ROLES)):
+            raise ValueError("Legacy receipt does not prove both exact full A/B runs")
+    else:
+        roles = receipt.get("roles")
+        if (receipt.get("bundle_schema") != "mmdl-runpod-bundle-v2"
+                or receipt.get("suite") not in _SUITE_ROLES
+                or roles != list(_SUITE_ROLES[receipt["suite"]])
+                or receipt.get("expected_inference_records") != 900 * len(roles)
+                or runs.get("roles") != roles
+                or runs.get("total_inference_records") != 900 * len(roles)
+                or any(not isinstance(runs.get(role), dict)
+                       or runs[role].get("run_id") != f"{job_id}-{role}"
+                       or runs[role].get("count") != 900 for role in roles)):
+            raise ValueError("Receipt does not prove the exact complete suite roles")
     if (not isinstance(ledger, dict) or ledger.get("job_id") != job_id or ledger.get("pod_id") != pod_id
             or ledger.get("created_for_job") is not True):
         raise ValueError("Resource ledger does not prove Pod ownership for this job")

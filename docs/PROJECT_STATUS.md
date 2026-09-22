@@ -6,6 +6,33 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
 팀 저장소는 `https://github.com/jang2296/MMDL`, 총 RunPod 비용 상한은 USD 6.80이다.
 대여 직전 GPU+storage 실단가에서 회수/복구 여유를 제외한 최대시간을 계산·기록한다.
 
+## 2026-09-22 가속 전환 — 진행 중
+
+이 절은 아래 이전 실행 순서보다 우선한다. 사용자는 기존 느린3090 유지,
+가속 구현→추가 로컬1문제→GitHub→별도3090 분석900→검증·회수 후 기존Pod 정리→
+새3090 제출900을 승인했다. 두 Pod가 잠시 겹쳐도 총 비용은 USD6.80 이내다.
+
+- 기존 `mmmu-val-v1` 설정과 실행 중인 Pod/코드는 보존한다.
+- 새 `mmmu-val-fast-transformers-v1`: batch1, 자동 SDPA, 매토큰 CPU streamer 없음.
+- 새 `mmmu-val-fast-vllm-32k-v1`: batch2, 요청별 seed, BF16, native generated-only presence penalty,
+  prefix cache 없음. 모델/processor revision, 데이터900, P0, sampling, 이미지 범위, parser는 유지한다.
+  사용자가 잘림 문제를 지적하고 공식 생성 상한32768을 명시 승인했다. 전체 문맥36864와 구별한다.
+- vLLM 전용 exact lock과 CUDA/UVM 설치 전 probe, single-role suite/bundle을 구현했다.
+  로컬 격리 환경의157개 패키지 호환 검사와 vLLM0.11.0 import/CPU processor 검사가 통과했다.
+  사용자 최신 지시에 따라 로컬 추가 모델 추론은 하지 않고 새3090에서 GPU 검증한다.
+- vLLM 내부 입력 token IDs와 pinned processor reference IDs를 비교한다. reference pixel tensor hash를
+  실제 엔진 내부 tensor 검증으로 표현하지 않는다. 동시처리 시간은 batch walltime과 배분 시간을 구별한다.
+- 추가 로컬1문제 완료: `smoke-fast-local-one`, 312 tokens/EOS, 생성174.740초/전체199.549초,
+  오류0. peak VRAM allocated5,043,425,792/reserved5,093,982,208 bytes, RSS11,221,233,664 bytes.
+  이 실행의2048 상한은 새32768 승인 전 조건이다. 새3090 vLLM/32768 검증을 대체하지 않는다.
+  출력 길이가 달라졌으므로 이전 실행 대비 전체시간 비율을 순수 가속 배율로 주장하지 않는다.
+  기존34개 로컬 결과는 재실행하지 않았다. 새3090 smoke/900은 아직 미실행이다.
+- 기존 Pod 읽기 전용 점검(2026-09-22 01:48 UTC 부근):75/900, 시스템 실패0,
+  EOS50/length25,69,505 생성tokens/4,449.426초. GPU40%, VRAM19,696/24,576MiB,59도.
+  입력에 따라 메모리는 증가하지만 이 점검에서 OOM은 없었다. 길이 제한의 품질 제약은 존재한다.
+- 확인 순서: CPU 검사 → 로컬1문제 → 게시/합산 비용 watchdog → 새3090 analysis900 →
+  로컬 완전 검증/열람 → 기존 partial 회수/정리 → 새3090 assignment900 → 회수/최종 정리.
+
 ## 순서와 증거
 
 1. 발견/공식 자료 확인: 완료. 초기 폴더는 AGENTS.md와 과제 지침·템플릿

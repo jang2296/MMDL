@@ -110,19 +110,20 @@ python scripts/check_submission.py
 smoke 통과 후 공통 protocol을 동결하고 검사된 feature commit을 게시한다.
 RunPod에는 로컬 코드/venv/모델/cache/결과를 복사하지 않는다. 아래 경로는 현재
 코드·CPU 검사를 통과했고 RunPod의 GitHub clean clone·lock 설치를 확인했다.
-**GPU/BF16 검사 통과와 A900/B900 전체 평가는 아직 완료되지 않았다.**
+**기존3090의 GPU/BF16/smoke는 통과했지만 A900/B900 전체 평가는 아직 완료되지 않았다.**
 
 사용자가 승인한 3090 대안은 `configs/hardware/rtx3090_24gb.yaml`이다.
 기본값은 계속 4090이며, 아래 `reproduce.sh` 실행·재개에
 `--hardware configs/hardware/rtx3090_24gb.yaml`을 추가하면 3090 프로필을 선택한다.
 기존 5090 대안은 `configs/hardware/rtx5090_32gb.yaml`로 보존한다.
-모든 프로필은 같은 BF16/P0/generation/parser/batch 1/SDPA math를 유지하며 CPU offload하지 않는다.
+하드웨어 프로필은 BF16/P0/generation/parser를 바꾸지 않으며 CPU offload하지 않는다.
+batch/backend/kernel은 아래 명시적 평가 protocol에서 선택하고 하드웨어 profile로 덮어쓰지 않는다.
 선택한 프로필과 실제 단일 GPU 이름·VRAM이 다르면 중단한다. 대여 직후 CUDA 초기화,
 설치 후 실제 BF16 연산을 확인하며 3090의 전체 평가 성공을 아직 주장하지 않는다.
 
 배포 전 총 예산·GPU/디스크 실단가·회수 여유를 포함한 최대시간과 독립적인 STOP
 watchdog을 정한다. 승인된 전체 예산을 job manifest에 기록하며 승인 없는 초과,
-자동 충전·추가 Pod·승인 범위를 벗어난 GPU 전환은 금지한다. 기본은 단일 GPU와 작업 전용 Pod volume,
+자동 충전·승인 범위를 벗어난 추가 Pod/GPU 전환은 금지한다. 기본은 단일 GPU와 작업 전용 Pod volume,
 별도 Network Volume은 생성하지 않는다. 아래 watchdog 값은 실제 외부 감시를 가동한
 제어측의 기록이어야 하며 임의 문자열로 gate를 통과시키면 안 된다. 재현 스크립트는
 Pod를 생성하거나 과금을 중지하지 않으므로, 프로세스 종료를 Pod stop으로 간주하지 않는다.
@@ -138,6 +139,58 @@ Ubuntu 24.04/Python 3.12이며 `NVIDIA_REQUIRE_CUDA`를 설정하지 않는다. 
 `env/requirements-eval.lock`을 설치하고 `torch==2.8.0+cu128`은 그대로 유지한다.
 컨테이너 선택이 호스트 호환성을 보장하는 것은 아니므로, 실제 Pod에서 doctor와 BF16
 연산 검사를 통과하기 전에는 평가 성공을 주장하지 않는다.
+
+### 가속 전환과 단일 역할 실행
+
+2026-09-22 승인 순서는 기존 Pod 유지→로컬 추가1문제→GitHub→별도3090 분석900→
+검증·회수→기존 Pod 부분 결과 회수/정리→새3090 제출900이다. 일시적인 두 Pod 비용도
+기존 지출과 함께 **총 USD6.80**에 포함하며 각각에 USD6.80을 배정하지 않는다.
+
+| protocol 파일 | 실행 방식 | 용도 |
+|---|---|---|
+| `mmmu_val_v1.yaml` | Transformers, batch1, SDPA math | 기존 reference 보존 |
+| `mmmu_val_fast_transformers_v1.yaml` | Transformers, batch1, 자동 SDPA, 토큰 streamer 없음 | 로컬8GB 추가1문제 |
+| `mmmu_val_fast_vllm_v1.yaml` | vLLM0.11.0, 동시2, BF16 GPU-only, 출력 상한32768 | 새3090 분석/제출 |
+
+모델/processor revision·MMMU900·P0·sampling·이미지 budget·채점은 같다.
+새 `mmmu-val-fast-vllm-32k-v1`은 사용자 승인으로 Qwen 공식 평가 recipe의 생성 상한32768을 적용한다.
+기존 reference와 완료된 로컬 fast1 smoke의2048은 과거 설정으로 보존하며 새 결과와 합치지 않는다.
+전체 문맥 한도는36864로 둔다. 고정 processor의900개 CPU 전처리 최대 입력2655에
+출력32768을 더한35423보다 크며, 입력+생성 예산 초과 시 잘라내지 않고 중단한다.
+EOS가 나오면 상한까지 채우지 않고 종료한다. 메모리/비용이 부족해도 생성 상한을 자동 축소하지 않는다.
+백엔드별 계산/난수 구현이 다르므로 동일 응답을 보장하지 않으며 이전 reference 결과와 합치지 않는다.
+vLLM의 `deterministic: false`는 PyTorch deterministic-kernel 강제를 주장하지 않는다는 뜻이다.
+공식 sampling 값과 문제별 seed는 그대로 고정한다.
+vLLM은 PyTorch SDPA/streamer 경로를 사용하지 않는다. 로컬1문제 성공은 vLLM 검증이 아니다.
+
+```bash
+bash scripts/eval.sh --protocol configs/eval/mmmu_val_fast_transformers_v1.yaml \
+  --hardware configs/hardware/rtx5060_8gb.yaml --run-id smoke-fast-local-one \
+  --mode smoke --sample-id validation_Accounting_1 --no-download
+
+# GitHub clean clone 이후, 승인된 별도3090에서 분석용만 실행한다.
+bash scripts/reproduce.sh --commit "$MMDL_CODE_COMMIT" --job-id "$MMDL_JOB_ID" \
+  --protocol configs/eval/mmmu_val_fast_vllm_v1.yaml \
+  --hardware configs/hardware/rtx3090_24gb.yaml --suite mmmu-val-analysis --execute
+```
+
+분석900을 로컬 검증한 뒤 새 Pod에서는 suite만 `mmmu-val-assignment`로 바꾸고 새 job ID를 쓴다.
+아래 clone shell의 suite/protocol/hardware 인자도 같은 값으로 바꿀 수 있다.
+각 suite는 설치 전 `nvidia-smi`/libcuda `cuInit(0)`/UVM 접근을 검사하고,
+protocol에 맞는 exact lock을 별도 venv에 설치한 뒤 `pip check`/doctor/BF16 검사를 한다.
+`MMDL_CONTAINER_IMAGE`에 실제 digest를 기록한다. 호스트 CUDA 장애는 컨테이너 안에서 고치거나
+driver 검사를 우회하지 않는다. vLLM은 Accounting1·Biology29(5이미지)의 동시 smoke 후 선택900만 실행한다.
+
+vLLM은 `env/requirements-vllm.lock`을 사용한다. Torch2.8/cu128·Transformers4.57.1은 유지하되
+Numba 호환 NumPy2.2.6과 vLLM 허용 setuptools를 별도로 고정한다. 기존 eval lock/venv는 변경하지 않는다.
+vLLM 입력 token IDs는 pinned processor reference와 정확히 비교하고 불일치는 중단한다.
+reference pixel tensor hash는 vLLM 내부 tensor를 직접 검증했다는 뜻이 아니다.
+동시처리 generation/sample 시간은 batch walltime을 요청 수로 나눈 값이며 개별 응답 지연이 아니다.
+worker allocator peak를 얻지 못하면 `null`로 기록하고, GPU 전체 메모리 snapshot 관측값과 구별한다.
+
+단일-role bundle은 명시된 역할의900개만 검증하며 receipt도 해당 job/Pod에만 유효하다.
+분석 receipt로 다른 기존 Pod를 자동 삭제할 수 없다. 기존 partial 결과는 별도로 회수·hash 검증한다.
+새 분석/제출 두 결과는 동일 commit/protocol/model/data/lock을 확인하되 새 호스트의 driver/환경 차이도 기록한다.
 
 Git과 Python 3.12가 있는 승인 Pod에서, 실제 영구 볼륨 mount를 `MMDL_VOLUME_ROOT`로
 지정하고 그 아래 **서로 분리된** `HF_HOME`, `MMDL_DATA_ROOT`, `MMDL_ARTIFACT_ROOT`,
@@ -217,6 +270,8 @@ Stop만으로 cleanup 완료를 선언하지 않는다. API 결과·시각·잔�
 외부 watchdog/관리 API로 GPU를 Stop한 뒤 `RECOVERY_REQUIRED/CLEANUP_PENDING`, 남은
 storage 비용과 정확한 복구 경로를 보고한다. 원인별 재시도는 최대3회다.
 첫 Assignment 보고서는 회수·검증된 A만으로 `scripts/report_baseline.py`에서 생성한다.
+정본은 사용자 지정 루트 `Assignment_1.md`이며, 과제 §4 경로 `reports/mmmu_baseline.md`에도
+같은 본문을 동기화한다. `assignment/assignment1.md`는 두 경로를 안내한다.
 
 향후 승인된 MMMU test/MMMU-Pro도 같은 GitHub clean-clone·GPU-only·회수/삭제 정책을 쓴다.
 현재 suite는 validation A/B만 허용하며 final suite는 거부한다. final protocol/revision/정답

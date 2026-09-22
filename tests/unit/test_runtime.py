@@ -1,6 +1,4 @@
 import copy
-import contextlib
-import io
 import unittest
 from pathlib import Path
 
@@ -12,24 +10,15 @@ from transformers.generation.logits_process import TemperatureLogitsWarper
 from mmdl.runtime.contracts import load_configs, sample_seed, validate_configs
 from mmdl.runtime.generation import GeneratedOnlyPresencePenalty
 from mmdl.runtime.placement import placement_kwargs
-from mmdl.evaluation.backends.transformers_backend import TokenProgress
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class RuntimeTests(unittest.TestCase):
-    def test_progress_excludes_prompt_and_never_emits_token_values(self):
-        stream = io.StringIO()
-        progress = TokenProgress()
-        with contextlib.redirect_stdout(stream):
-            progress.put(torch.tensor([[98765, 98766]]))
-            progress.put(torch.tensor([87654]))
-            progress.put(torch.tensor([76543]))
-            progress.end()
-        self.assertEqual(progress.tokens, 2)
-        self.assertIn('"generated_tokens": 1', stream.getvalue())
-        self.assertNotIn("98765", stream.getvalue())
-        self.assertNotIn("87654", stream.getvalue())
+    def test_transformers_backend_has_no_per_token_streamer(self):
+        source = (ROOT / "src/mmdl/evaluation/backends/transformers_backend.py").read_text()
+        self.assertNotIn("streamer=", source)
+        self.assertNotIn("BaseStreamer", source)
 
     def test_protocol_and_hardware_boundaries(self):
         cfg, hw = load_configs(ROOT / "configs/eval/mmmu_val_v1.yaml",

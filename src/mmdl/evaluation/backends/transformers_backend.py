@@ -1,48 +1,20 @@
-"""BF16 Qwen3-VL with identical generation on either hardware profile."""
+"""BF16 Qwen3-VL Transformers evaluation backend."""
 
-import hashlib
-import json
 import random
 import time
+from contextlib import nullcontext
 
 import numpy as np
 import psutil
 import torch
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoConfig, AutoProcessor, LogitsProcessorList, Qwen3VLForConditionalGeneration
-from transformers.generation.streamers import BaseStreamer
 
 from mmdl.runtime.artifacts import digest
 from mmdl.runtime.contracts import MODEL_REVISION
 from mmdl.runtime.generation import GeneratedOnlyPresencePenalty
 from mmdl.runtime.placement import placement_kwargs
-
-
-def tensor_identity(tensor):
-    value = tensor.detach().cpu().contiguous()
-    return {"shape": list(value.shape), "dtype": str(value.dtype),
-            "sha256": hashlib.sha256(value.view(torch.uint8).numpy().tobytes()).hexdigest()}
-
-
-class TokenProgress(BaseStreamer):
-    """Report counts, never benchmark text, while a long offloaded response runs."""
-
-    def __init__(self):
-        self.started = time.monotonic()
-        self.tokens = 0
-        self.prompt_pending = True
-
-    def put(self, value):
-        if self.prompt_pending:
-            self.prompt_pending = False
-            return
-        self.tokens += value.numel()
-        if self.tokens == 1 or self.tokens % 128 == 0:
-            print(json.dumps({"generated_tokens": self.tokens,
-                              "elapsed_seconds": round(time.monotonic() - self.started, 3)}), flush=True)
-
-    def end(self):
-        pass  # Final counts and synchronized timing are emitted by the engine.
+from mmdl.evaluation.backends.input_preparation import prepare_inputs
 
 
 class TransformersBackend:
@@ -112,6 +84,8 @@ class TransformersBackend:
                 "placement": self.placement, "generation_config": self.generation.to_dict(),
                 "presence_penalty": {"implementation": "generated-only-custom", "value": 1.5,
                                      "order": "before temperature/top_k/top_p"},
+                "token_progress_streamer": False,
+                "attention_kernel": self.cfg["execution"]["sdpa_kernel"],
                 "image_processor": self.processor.image_processor.to_dict(),
                 "chat_template_sha256": digest(self.processor.chat_template)}
 
@@ -120,26 +94,18 @@ class TransformersBackend:
         np.random.seed(seed)
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.processor(text=[text], images=images, return_tensors="pt")
-        if "pixel_values" not in inputs or inputs["image_grid_thw"].shape[0] != len(images):
-            raise ValueError("Actual image tensors do not match message images")
-        if inputs["input_ids"].dtype != torch.int64 or inputs["image_grid_thw"].is_floating_point():
-            raise ValueError("Integer input types were changed")
-        image_tokens = int((inputs["input_ids"] == self.model.config.image_token_id).sum())
-        expected = int(inputs["image_grid_thw"].prod(-1).sum()) // self.processor.image_processor.merge_size**2
-        if image_tokens != expected:
-            raise ValueError("Image token count differs from processor grid")
-        identity = {key: tensor_identity(value) for key, value in inputs.items()}
-        grid = inputs["image_grid_thw"].tolist()
-        input_length = inputs["input_ids"].shape[-1]
-        inputs = inputs.to(self.device)  # device only: retain integer types
+        prepared = prepare_inputs(self.processor, self.model.config, messages, images)
+        inputs = prepared["inputs"].to(self.device)  # device only: retain integer types
+        input_length = prepared["input_tokens"]
         penalty = GeneratedOnlyPresencePenalty(input_length, self.cfg["generation"]["presence_penalty"])
         start = time.monotonic()
-        with torch.inference_mode(), sdpa_kernel(SDPBackend.MATH):
+        kernel = self.cfg["execution"]["sdpa_kernel"]
+        attention = sdpa_kernel(SDPBackend.MATH) if kernel == "math" else nullcontext()
+        if kernel not in {"math", "auto"}:
+            raise ValueError(f"Unsupported SDPA kernel: {kernel}")
+        with torch.inference_mode(), attention:
             result = self.model.generate(**inputs, generation_config=self.generation,
-                                         logits_processor=LogitsProcessorList([penalty]),
-                                         streamer=TokenProgress())
+                                         logits_processor=LogitsProcessorList([penalty]))
         torch.cuda.synchronize()
         seconds = time.monotonic() - start
         token_ids = result.sequences[0, input_length:].tolist()
@@ -149,7 +115,16 @@ class TransformersBackend:
         eos = [eos] if isinstance(eos, int) else eos or []
         reason = "eos" if token_ids and token_ids[-1] in eos else "length"
         return dict(raw_response=raw, generated_token_ids=token_ids, generated_tokens=len(token_ids),
-                    input_tokens=input_length, image_grid_thw=grid, input_tensors=identity,
-                    input_sha256=digest(identity), chat_prompt=text, generation_seconds=seconds,
+                    input_tokens=input_length, image_grid_thw=prepared["image_grid_thw"],
+                    input_tensors=prepared["input_tensors"], input_sha256=prepared["input_sha256"],
+                    chat_prompt=prepared["chat_prompt"], generation_seconds=seconds,
                     finish_reason=reason, peak_vram_allocated_bytes=torch.cuda.max_memory_allocated(),
                     peak_vram_reserved_bytes=torch.cuda.max_memory_reserved())
+
+    def generate_batch(self, requests):
+        """Keep the reference path serial; fast concurrency belongs to vLLM."""
+        if len(requests) != 1:
+            raise ValueError("Transformers reference backend requires batch_size=1")
+        request = requests[0]
+        return [self.generate(request["messages"], request["images"], request["seed"])
+                | {"sample_id": request["sample_id"]}]

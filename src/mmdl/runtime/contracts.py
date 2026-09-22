@@ -23,6 +23,12 @@ RECIPE = dict(do_sample=True, temperature=0.7, top_p=0.8, top_k=20,
               seed_policy="per_sample_sha256_v1", num_beams=1)
 EXECUTION = dict(backend="transformers", batch_size=1, attention="sdpa",
                  sdpa_kernel="math", deterministic=True)
+EXECUTION_PROFILES = {
+    "mmmu-val-v1": EXECUTION,
+    "mmmu-val-fast-transformers-v1": EXECUTION | {"sdpa_kernel": "auto"},
+    "mmmu-val-fast-vllm-32k-v1": dict(backend="vllm", batch_size=2, attention="vllm",
+                                  sdpa_kernel="not_applicable", deterministic=False),
+}
 HARDWARE_KEYS = set("name placement gpu_index expected_vram_gib gpu_weight_cap_gib "
                     "gpu_reserve_gib cpu_weight_cap_gib cpu_available_fraction "
                     "min_free_gpu_gib allow_disk_offload num_workers".split())
@@ -50,8 +56,8 @@ def validate_configs(cfg, hw):
         raise ValueError("Unknown or missing generation controls")
     if any(cfg["generation"].get(k) != v for k, v in RECIPE.items()):
         raise ValueError("The Qwen Instruct recipe and team seed policy are fixed")
-    if cfg["execution"] != EXECUTION or cfg["prompt_policy"] != "P0":
-        raise ValueError("Reference execution and P0 are fixed")
+    if cfg["execution"] != EXECUTION_PROFILES.get(cfg.get("protocol_id")) or cfg["prompt_policy"] != "P0":
+        raise ValueError("Execution must match a named fixed protocol; P0 is unchanged")
     if cfg["parser"] != "mmmu-official-no-random-v1":
         raise ValueError("Unknown parser")
     if cfg["status"] not in {"DRAFT", "FROZEN"}:
@@ -63,10 +69,17 @@ def validate_configs(cfg, hw):
         raise ValueError("Only the official processor may resize images")
     if not 1024 <= image["min_pixels"] <= image["max_pixels"]:
         raise ValueError("Invalid pixel budget")
+    if cfg["protocol_id"].startswith("mmmu-val-fast-"):
+        output_limit = 32768 if cfg["execution"]["backend"] == "vllm" else 2048
+        if cfg["generation"]["max_new_tokens"] != output_limit or image != dict(
+                min_pixels=262144, max_pixels=1310720, resize_owner="official_processor"):
+            raise ValueError("Named acceleration protocol length and image budgets are fixed")
     if set(hw) != HARDWARE_KEYS:
         raise ValueError("Hardware profile must contain placement controls only")
     if hw["placement"] not in {"gpu_only", "cpu_offload"} or hw["allow_disk_offload"] is not False:
         raise ValueError("Unsupported placement or disk offload")
+    if cfg["execution"]["backend"] == "vllm" and hw["placement"] != "gpu_only":
+        raise ValueError("The vLLM protocol requires GPU-only BF16 placement")
     if hw["gpu_index"] != 0 or hw["num_workers"] != 0:
         raise ValueError("Reference uses one visible GPU and sequential data loading")
     for key in ("expected_vram_gib", "gpu_weight_cap_gib", "gpu_reserve_gib",

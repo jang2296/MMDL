@@ -60,7 +60,43 @@ def code_records(root):
     paths += list((root / "scripts").glob("*.py"))
     paths += [root / "third_party/mmmu/eval_utils.py", root / "env/requirements-eval.lock",
               root / "pyproject.toml"]
+    paths += list((root / "env").glob("requirements-vllm.lock"))
     return file_records(root, paths)
+
+
+def validate_batch_outputs(requests, outputs):
+    if len(outputs) != len(requests) or [item.get("sample_id") for item in outputs] != [
+            item["sample_id"] for item in requests]:
+        raise ValueError("Backend output count/order/sample IDs differ from submitted requests")
+
+
+def prepare_request(row, subject, artifact_root, run_dir, cfg):
+    sample, images, gold = separate_sample(row, subject)
+    messages = build_messages(sample, images, run_dir)
+    serialized = [{"role": "user", "content": []}]
+    image_files = []
+    for image in images:
+        encoded_image = io.BytesIO()
+        image.save(encoded_image, format="PNG")
+        image_bytes = encoded_image.getvalue()
+        image_hash = hashlib.sha256(image_bytes).hexdigest()
+        path = artifact_root / "assets/images" / f"{image_hash}.png"
+        if path.exists():
+            if sha256_file(path) != image_hash:
+                raise ValueError("Existing inspection image differs from current model input")
+        else:
+            atomic_bytes(path, image_bytes)
+        relative = f"../../assets/images/{image_hash}.png"
+        image_files.append(relative)
+        serialized[0]["content"].append({"type": "image", "image": relative, "sha256": image_hash})
+    serialized[0]["content"].append(messages[0]["content"][-1])
+    seed = sample_seed(cfg["generation"]["seed"], sample["id"])
+    request = dict(sample_id=sample["id"], messages=messages, images=images, seed=seed)
+    record = sample | gold | dict(seed=seed, messages=serialized, images=image_files,
+                                 prompt=messages[0]["content"][-1]["text"],
+                                 inference_id=uuid.uuid4().hex,
+                                 inference_started_at=datetime.now(timezone.utc).isoformat())
+    return request, record
 
 
 def publish(public_root, run_dir, summary, environment, cfg, hw, identity):
@@ -146,7 +182,7 @@ def run(args, cfg, hw, root):
         write_json(run_dir / "locations.json", dict(model=str(args.model_path), data=str(args.data_root)))
         if not (run_dir / "command.json").exists():
             reproduce = (
-                "bash scripts/eval.sh --protocol configs/eval/mmmu_val_v1.yaml "
+                f"bash scripts/eval.sh --protocol configs/eval/{Path(args.protocol).name} "
                 f"--hardware configs/hardware/{hw['name']}.yaml "
                 "--model-ref manifests/models/baseline.json "
                 f'--model-path "$HF_HOME/hub/models--Qwen--Qwen3-VL-4B-Instruct/snapshots/{MODEL_REVISION}" '
@@ -181,9 +217,13 @@ def run(args, cfg, hw, root):
                     raise RuntimeError("Could not preserve source patch")
                 patch += result.stdout
             atomic_text(run_dir / "source.patch", patch)
-        from mmdl.evaluation.backends.transformers_backend import TransformersBackend
-        backend = TransformersBackend(str(args.model_path), cfg, hw, model_manifest["kind"],
-                                      str(args.base_path))
+        if cfg["execution"]["backend"] == "vllm":
+            from mmdl.evaluation.backends.vllm_backend import VLLMBackend
+            backend = VLLMBackend(str(args.model_path), cfg, hw, model_manifest["kind"], str(args.base_path))
+        else:
+            from mmdl.evaluation.backends.transformers_backend import TransformersBackend
+            backend = TransformersBackend(str(args.model_path), cfg, hw, model_manifest["kind"],
+                                          str(args.base_path))
         backend_details = backend.describe()
         backend_path = run_dir / "backend.json"
         if backend_path.exists():
@@ -201,60 +241,50 @@ def run(args, cfg, hw, root):
                           attempted_ids=[], completed_ids=[], status="RUNNING")
         write_json(invocation_path, invocation)
         failed = None
-        for sid in ids:
-            if sid in writer.completed:
-                continue
-            sample_start = time.monotonic()
+        pending = [sid for sid in ids if sid not in writer.completed]
+        batch_size = cfg["execution"]["batch_size"]
+        for offset in range(0, len(pending), batch_size):
+            batch_ids = pending[offset:offset + batch_size]
+            batch_start = time.monotonic()
             try:
-                subject, index = lookup[sid]
-                sample, images, gold = separate_sample(datasets[subject][index], subject)
-                messages = build_messages(sample, images, run_dir)
-                serialized = [{"role": "user", "content": []}]
-                image_files = []
-                for image in images:
-                    encoded_image = io.BytesIO()
-                    image.save(encoded_image, format="PNG")
-                    image_bytes = encoded_image.getvalue()
-                    image_hash = hashlib.sha256(image_bytes).hexdigest()
-                    path = args.artifact_root / "assets/images" / f"{image_hash}.png"
-                    if path.exists():
-                        if sha256_file(path) != image_hash:
-                            raise ValueError("Existing inspection image differs from current model input")
-                    else:
-                        atomic_bytes(path, image_bytes)
-                    relative = f"../../assets/images/{image_hash}.png"
-                    image_files.append(relative)
-                    serialized[0]["content"].append({"type": "image", "image": relative,
-                                                     "sha256": sha256_file(path)})
-                serialized[0]["content"].append(messages[0]["content"][-1])
-                seed = sample_seed(cfg["generation"]["seed"], sid)
-                inference_id = uuid.uuid4().hex
-                inference_started = datetime.now(timezone.utc).isoformat()
-                invocation["attempted_ids"].append(sid)
+                requests, records_for_batch = [], []
+                for sid in batch_ids:
+                    subject, index = lookup[sid]
+                    request, record = prepare_request(datasets[subject][index], subject,
+                                                      args.artifact_root, run_dir, cfg)
+                    requests.append(request)
+                    records_for_batch.append(record)
+                invocation["attempted_ids"].extend(batch_ids)
                 write_json(invocation_path, invocation)
-                output = backend.generate(messages, images, seed)
-                score = score_response(output["raw_response"], sample["question_type"],
-                                       sample["options"], gold["answer"])
-                raw = output["raw_response"]
-                # Preserve narrative verbatim; answer-only formatting is not an explanation.
-                just_answer = bool(re.fullmatch(
-                    r"\s*(?:(?:the\s+)?(?:correct\s+|final\s+)?answer\s*(?:is|:)\s*)?"
-                    r"[*\s]*\(?[A-Z]\)?[*\.\s]*", raw, re.IGNORECASE
-                )) if sample["question_type"] == "multiple-choice" else len(raw.split()) <= 3
-                row = sample | gold | output | score | dict(
-                    seed=seed, messages=serialized, prompt=messages[0]["content"][-1]["text"],
-                    images=image_files, model_explanation=None if just_answer else raw or None,
-                    inference_id=inference_id, inference_invocation_id=invocation_id,
-                    inference_started_at=inference_started, run_id=args.run_id,
-                    explanation_policy="verbatim narrative, no synthesized explanation; answer-only/short open answer has none; full raw always retained",
-                    status="COMPLETED", total_sample_seconds=time.monotonic() - sample_start)
-                writer.save(row)
-                invocation["completed_ids"].append(sid)
-                write_json(invocation_path, invocation)
-                print(json.dumps(dict(id=sid, completed=len(writer.completed), total=len(ids),
-                                      tokens=output["generated_tokens"], seconds=round(output["generation_seconds"], 3))), flush=True)
+                outputs = backend.generate_batch(requests)
+                validate_batch_outputs(requests, outputs)
+                batch_seconds = time.monotonic() - batch_start
+                for record, output in zip(records_for_batch, outputs, strict=True):
+                    sid = record["id"]
+                    score = score_response(output["raw_response"], record["question_type"],
+                                           record["options"], record["answer"])
+                    raw = output["raw_response"]
+                    just_answer = bool(re.fullmatch(
+                        r"\s*(?:(?:the\s+)?(?:correct\s+|final\s+)?answer\s*(?:is|:)\s*)?"
+                        r"[*\s]*\(?[A-Z]\)?[*\.\s]*", raw, re.IGNORECASE
+                    )) if record["question_type"] == "multiple-choice" else len(raw.split()) <= 3
+                    row = record | output | score | dict(
+                        model_explanation=None if just_answer else raw or None,
+                        inference_invocation_id=invocation_id, run_id=args.run_id,
+                        explanation_policy="verbatim narrative, no synthesized explanation; answer-only/short open answer has none; full raw always retained",
+                        status="COMPLETED", total_sample_seconds=batch_seconds / len(batch_ids),
+                        total_sample_timing_policy="batch_wall_divided_by_size",
+                        batch_ids=batch_ids, batch_wall_seconds=batch_seconds)
+                    writer.save(row)
+                    invocation["completed_ids"].append(sid)
+                    write_json(invocation_path, invocation)
+                    print(json.dumps(dict(id=sid, completed=len(writer.completed), total=len(ids),
+                                          tokens=output["generated_tokens"], seconds=round(output["generation_seconds"], 3),
+                                          batch_size=len(batch_ids))), flush=True)
             except Exception as exc:
-                writer.failure(sid, exc)
+                for sid in batch_ids:
+                    if sid not in writer.completed and not (run_dir / "external_failures" / f"{sid}.json").exists():
+                        writer.failure(sid, exc)
                 failed = exc
                 break
         invocation.update(status="FAILED" if failed else "COMPLETED",
@@ -264,9 +294,15 @@ def run(args, cfg, hw, root):
         summary.update(evaluation_seconds_this_invocation=time.monotonic() - evaluation_start,
                        model_load_seconds=backend.load_seconds,
                        total_seconds_this_invocation=time.monotonic() - start,
+                       sample_timing_policy="batch_wall_divided_by_size; not individual request latency",
+                       ram_measurement_scope="parent_process_only; excludes vLLM workers",
                        peak_ram_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
-                       peak_vram_allocated_bytes=max((r["peak_vram_allocated_bytes"] for r in writer.completed.values()), default=0),
-                       peak_vram_reserved_bytes=max((r["peak_vram_reserved_bytes"] for r in writer.completed.values()), default=0))
+                       peak_vram_allocated_bytes=max((r["peak_vram_allocated_bytes"] for r in writer.completed.values()
+                                                     if r.get("peak_vram_allocated_bytes") is not None), default=None),
+                       peak_vram_reserved_bytes=max((r["peak_vram_reserved_bytes"] for r in writer.completed.values()
+                                                    if r.get("peak_vram_reserved_bytes") is not None), default=None),
+                       max_observed_device_memory_used_bytes=max((r["observed_device_memory_used_bytes"]
+                            for r in writer.completed.values() if r.get("observed_device_memory_used_bytes") is not None), default=None))
         write_json(run_dir / "summary.json", summary)
         render(run_dir)
         publish(args.public_root, run_dir, summary, environment, cfg, hw, identity)

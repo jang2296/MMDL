@@ -48,6 +48,8 @@ def main():
         parser.error("run-id must be a safe directory name")
     if args.limit is not None and args.limit < 1:
         parser.error("limit must be positive")
+    if args.sample_id and len(args.sample_id) != len(set(args.sample_id)):
+        parser.error("sample-id values must be unique")
     cfg, hw = load_configs(args.protocol, args.hardware)
     try:
         validate_execution(args, hw)

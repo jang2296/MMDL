@@ -24,7 +24,8 @@ from typing import Any
 
 GIB = 1024**3
 RESERVE_BYTES = 50 * GIB
-PACKAGES = ("torch", "transformers", "accelerate", "datasets", "psutil")
+PACKAGES = ("torch", "torchvision", "transformers", "accelerate", "datasets", "psutil",
+            "numpy", "pillow", "tokenizers", "vllm")
 
 
 def _run(command: list[str]) -> tuple[str | None, str | None]:
