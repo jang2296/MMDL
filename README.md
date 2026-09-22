@@ -130,12 +130,14 @@ Pod를 생성하거나 과금을 중지하지 않으므로, 프로세스 종료�
 [공식 과금 안내](https://docs.runpod.io/pods/pricing)에 따르면 잔액 소진 시 별도 network volume이
 없는 Pod는 종료되어 데이터가 소실될 수 있다. 자동 충전/결제 설정은 변경하지 않는다.
 
-공식 이미지 후보는 `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`의 Linux amd64
-digest `sha256:4d1721e62b56d345c83b4fd6090664be6daf9312caab5b2e76f23d8231941851`이다.
-[공개 registry metadata](https://hub.docker.com/v2/repositories/runpod/pytorch/tags/1.0.2-cu1281-torch280-ubuntu2404/)와
-해당 digest의 build history에서 Python 3.12/venv 설치를 확인했다. 실제 Pod 검증 증거는 아니며,
-대여에는 `runpod/pytorch@sha256:4d1721e62b56d345c83b4fd6090664be6daf9312caab5b2e76f23d8231941851`로
-이미지를 고정하고, 기본 이미지의 Python 패키지 대신 별도 venv에 프로젝트 lock을 설치한다.
+현재 사용 가능한 공식 베이스 이미지는 `runpod/base:1.3.2-rc.169-ubuntu2404`의 Linux amd64
+digest `sha256:a5aead56b5ed7754235250afface107a8a19646ac34f62c87e5f41eb147fa7b2`이다.
+기존 `runpod/pytorch` CUDA 12.8 이미지는 현재 3090 호스트의 CUDA 12.7 환경에서
+Python 초기화 전에 `CUDA>=12.8` 요구조건으로 거부되므로 사용하지 않는다. 새 베이스는
+Ubuntu 24.04/Python 3.12이며 `NVIDIA_REQUIRE_CUDA`를 설정하지 않는다. 별도 venv에
+`env/requirements-eval.lock`을 설치하고 `torch==2.8.0+cu128`은 그대로 유지한다.
+컨테이너 선택이 호스트 호환성을 보장하는 것은 아니므로, 실제 Pod에서 doctor와 BF16
+연산 검사를 통과하기 전에는 평가 성공을 주장하지 않는다.
 
 Git과 Python 3.12가 있는 승인 Pod에서, 실제 영구 볼륨 mount를 `MMDL_VOLUME_ROOT`로
 지정하고 그 아래 **서로 분리된** `HF_HOME`, `MMDL_DATA_ROOT`, `MMDL_ARTIFACT_ROOT`,

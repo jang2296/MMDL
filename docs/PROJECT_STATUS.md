@@ -64,7 +64,7 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
    기존 SSH 인증에서 jang2296 계정 확인. 별도 GitHub 플러그인 설치는 필요하지 않다.
    공개키에 대응하는 기존 RSA 키로 비대화형 인증 성공, 비밀키 권한 0600 확인.
    Pod에는 공개키만 전달했다. 실제 SSH 실행·파일 쓰기·SCP 회수와 파일 해시 검증을 완료했다.
-6. RunPod A/B: 각각 NOT_STARTED. 실행 SHA `08e00ca802bb25f6915464df1f29ceb17b7eaa7e` 게시 확인.
+6. RunPod A/B: A 실행 중 / B 대기. 이전 실행 SHA `08e00ca802bb25f6915464df1f29ceb17b7eaa7e` 게시 확인.
    작업 전 Pod 0 / Network Volume 0. 5090 전용 Pod `0l1rrpy7m41lkq` 생성 성공(2026-09-21 19:12 UTC).
    Network Volume 없음. 60GB Pod volume/30GB container. 실제 GPU 단가 $0.69/h.
    독립 STOP watchdog을 먼저 가동했다. CUDA 진단 실패 후 조기 STOP/EXITED 확인, 감시 해제.
@@ -90,6 +90,21 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
    재개 전 Pod/Network Volume 모두0 확인. 3090은 표시 재고 MEDIUM, Community $0.22/h;
    3090 명시적 profile/실제 장비 검사를 추가하되 공통 평가 조건과 dependency lock은 바꾸지 않는다.
    3090 추가 후 CPU42/Ruff/mypy/shell syntax 및 FROZEN/GPU-only profile 검사 PASS. 추가 로컬 추론 없음.
+   새 게시 SHA `af961a36b2471e978e96efd7347e150cb0bbce00` 원격 일치 확인.
+   2026-09-22 00:14 UTC Community 3090 Pod `2j4knzy36jtzmv` 배정, 실제 GPU $0.22/h.
+   container30GB/volume60GB, 별도 Network Volume 없음. 외부 STOP 2026-09-22 22:14:12 UTC 가동.
+   새 실행22시간+보수적 디스크 비용+이전 청구 합계 약$5.271, 회수 여유 약$1.529.
+   배정 호스트 CUDA12.7이 cu128 컨테이너의 cuda>=12.8 조건을 만족하지 못해 부팅이 거부됐다.
+   Pod STOP/EXITED 확인 후 공식 base 이미지 digest로 교체하여 00:26 UTC 재시작했다.
+   `runpod/base@sha256:a5aead56b5ed7754235250afface107a8a19646ac34f62c87e5f41eb147fa7b2`.
+   SSH에서 실제3090 24,576MiB/driver565.57.01/Python3.12.3/영구 XFS volume60GiB 확인.
+   libcuda cuInit(0)=0 및 UVM 장치 열기 PASS. GitHub af961a3 직접 clone, exact lock 설치131.440초,
+   pip check/FROZEN config/doctor BF16 PASS, 고정 모델·MMMU 다운로드45.835초 완료.
+   실행 job=mmdl-val-20260922-3090. 사전 smoke1/1 완료/시스템 실패0, 실제 모델 GPU-only device map.
+   smoke 생성50.679초/전체80.206초, peak VRAM allocated9,162,626,560/reserved9,275,703,296 bytes.
+   00:33 UTC 제출용 A900 실제 평가 시작. 완료 후 별도 B900→검증/포장 순차 실행이다.
+   외부 STOP deadline은 그대로 유지한다. 사전1문제는 전체900 결과나 시간 추정의 충분한 표본이 아니다.
+   검사를 우회하거나 평가용 Torch2.8.0+cu128 lock/프로토콜을 바꾸지는 않는다.
    총 상한$6.80은 유지하며 재개 시 이미 사용한 비용·보존비·회수 여유를 먼저 차감한다.
 7. 무료 준비: Accounting30 종료·사후 검증 후 외부 setup/runpod-prep.DK1IeD의
    검증된 19개 파일을 원본에 통합했다. A/B role·Git SHA·개별 추론 호출 기록·공유 이미지,
@@ -165,6 +180,6 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
    삭제된 Pod는 --resume하지 않는다. 정상 새 Pod/남은 예산/독립 watchdog을 확인한 뒤 README의 clone 명령을
    MMDL_CODE_COMMIT에는 새 게시 전체 SHA, MMDL_JOB_ID=mmdl-val-20260922-3090,
    --hardware configs/hardware/rtx3090_24gb.yaml을 지정한다(4090 배정 시 대응 profile 사용).
-   doctor·최소 smoke·A900→B900·검증/포장/회수/삭제가 남았다.
-전체 protocol은 FROZEN이다. 상태는 RESUMING_PREPARATION/NO_ACTIVE_PAID_RESOURCES.
+   doctor·최소 smoke 완료. 현재 A900 진행 중이며 B900·검증/포장/회수/삭제가 남았다.
+전체 protocol은 FROZEN이다. 상태는 RUNPOD_ASSIGNMENT_RUNNING.
 A/B·전체 결과 로컬 회수·실측 보고서·최종 CLEANUP_VERIFIED는 아직 달성하지 않았다.
