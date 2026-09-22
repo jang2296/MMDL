@@ -14,15 +14,18 @@ RunPod Assignment A900 + analysis B900 독립 추론 → 로컬 회수·검증 �
 그 중 61개는 EOS, 9개는 `finish_reason=length`(각 32,768 token)였다. 9개가 전체 생성
 399,758 token의 294,912 token(73.77%)을 차지했다. 예시 장문은 Architecture_and_Engineering
 1에서 반복 문장이 약335회, 15에서 동일 유형 문장이 약79회 관측되었으나, 이는 원인 가설의
-근거이지 모델 일반 동작의 증명은 아니다. 새 분석 Pod는 삭제하지 않고 중지/보존 상태다.
+근거이지 모델 일반 동작의 증명은 아니다. 이후 사용자 요청으로 해당 분석 Pod와 로컬
+70문항 결과 디렉터리·압축 백업을 삭제했다. 수치는 삭제 전 관측이며 새 실행에 재사용하지 않는다.
 
 새 protocol 설정은 `configs/eval/mmmu_val_continuous_vllm_v1.yaml`의
 `mmmu-val-fast-vllm-32k-continuous-v1`이다. vLLM 0.11.0 `LLMEngine.add_request()`/`step()`으로
 최대 2개 request를 유지하고, 하나가 끝나면 최종 row를 즉시 저장한 뒤 다음 독립 문제를 refill한다.
 `async_scheduling=false`, eager, BF16, P0, seed/image/parser, 출력 상한 32,768은 유지한다.
 고정 batch protocol `mmmu-val-fast-vllm-32k-v1`은 역사 기록으로 보존하며 결과를 섞지 않는다.
-continuous protocol은 실제 GPU 검증 전이다. CPU 검사·GitHub 게시 후 새 Pod를 생성하여
-GPU smoke를 먼저 통과한 다음 분석 900문제를 실행한다.
+구현 commit `702ed44c4c45f454746ec4b371ad1b7403b67856`을 GitHub에 게시했다.
+새 RTX 3090/24GB Pod가 같은 commit을 clean checkout하고 lock 설치·CUDA/BF16·고정 다운로드·
+3문제 GPU SMOKE를 통과했다. 분석 900문제를 새로 시작했으며 첫 확인은 5/900, 시스템 오류 0이었다.
+이전 reference Pod는 그대로 유지했다. [상세 검증](../claudedocs/continuous_vllm_20260922.md).
 
 이번 새 배포에 한해 사용자가 비용을 더 지불할 수 있다고 명시적으로 승인하여
 `MMDL_COST_POLICY=user_waived` opt-in을 사용한다. 이는 결제/자동충전 변경이나 비용 0을
@@ -32,8 +35,12 @@ GPU smoke를 먼저 통과한 다음 분석 900문제를 실행한다.
 
 새 continuous engine의 CPU mock 검사는 완료 row를 다음 request보다 먼저 보존하고,
 완료 순서가 입력 순서와 달라도 기록하며, 후속 오류가 앞선 완료 결과를 지우지 않는지 통과했다.
-Accounting_1, Agriculture_1, Biology_29의 새 3문제 GPU smoke는 아직 실행 전이며, 모두
-`max_new_tokens=32768` protocol로 실행해야 한다.
+전체 72 tests, Ruff, mypy 22 source files, Bash syntax, staged 공개 파일 검사가 통과했다.
+설치된 vLLM 0.11.0 API/실제 SamplingParams의 CPU 검사도 통과했으며 로컬 GPU 추론은 추가하지 않았다.
+Accounting_1, Agriculture_1, Biology_29를 `max_new_tokens=32768`로 실행했다.
+모두 EOS 종료했으며 출력은 각각 303/5/415 tokens였다. 정답 1/3은 기능 SMOKE의 관측일 뿐
+최종 성능이 아니다. 평가 구간 17.1465 s, 500 ms GPU 전체 메모리 관측 최대 20.6025 GiB였다.
+Agriculture 결과 저장 후 Biology가 시작됐을 때 Accounting은 미완료여서 실제 rolling refill을 확인했다.
 
 연속 실행의 `generation_seconds`는 각 engine `step()` wall time을 당시 active request 수로
 나눈 attribution 값이고, 실제 요청 지연은 `request_latency_seconds`로 별도 기록한다.

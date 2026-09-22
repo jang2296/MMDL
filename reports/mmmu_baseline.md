@@ -15,6 +15,7 @@
 | 데이터 | `MMMU/MMMU` revision `98e6ac0cb9b7b2cd2c991b85a50762edc4aedc68`, validation, 30개 config × 30개 = 900개 |
 | 제출용 가속 protocol | `mmmu-val-fast-vllm-32k-continuous-v1`: vLLM `0.11.0`, GPU-only, 최대 active request 2, `max_new_tokens=32768`. 한 request가 끝날 때 즉시 완료 row를 저장하고 다음 request를 refill하는 continuous scheduling을 사용한다. 설치 lock은 [requirements-vllm.lock](https://github.com/jang2296/MMDL/blob/feat/mmmu-baseline/env/requirements-vllm.lock)이다. GPU 900개 실행·메모리·시간은 아직 미검증이다. |
 | 로컬 확인 | 기존 RTX 5060 8GB CPU-offload Transformers Accounting 30개와 fast local 1개는 2,048-token 역사적 확인이다. 후자는 312 tokens/EOS, generation 174.7396 s, whole 199.5493 s, allocator allocated/reserved 5,043,425,792/5,093,982,208 bytes, RSS 11,221,233,664 bytes였다. 이는 제출용 32k vLLM/900개 실행·속도 추정·점수가 아니다. |
+| 연속 처리 GPU 검증 | 새 RTX 3090 24GB에서 commit `702ed44c4c45f454746ec4b371ad1b7403b67856`의 3문제 SMOKE가 시스템 오류 없이 완료됐다. 출력은 303/5/415 tokens, 모두 EOS 종료였다. 평가 구간 17.1465 s, 500 ms 간격 전체 GPU 메모리 관측 최대 20.6025 GiB다. 정답은 1/3으로, 이 작은 실행은 기능 검증이지 최종 성능 지표가 아니다. 분석 900개는 별도로 새로 시작했고 아직 완료되지 않았다. |
 | RunPod 재현 | GitHub 고정 commit을 새 checkout에 받는 [reproduce.sh](https://github.com/jang2296/MMDL/blob/feat/mmmu-baseline/scripts/reproduce.sh)와 [eval.sh](https://github.com/jang2296/MMDL/blob/feat/mmmu-baseline/scripts/eval.sh)가 모델·데이터 경로를 인자/환경변수로 받는다. 환경 doctor, lock receipt, BF16 probe와 결과 hash를 남긴다. |
 
 <!-- REPORT_RUNTIME:BEGIN -->
@@ -33,7 +34,7 @@ bash scripts/eval.sh \
   --run-id baseline-accelerated-3090 --mode full
 ```
 
-백엔드와 batch는 수업 지침 §1.3·§5가 문서화를 조건으로 자유/권장한 엔지니어링 선택이다. 모델·revision·BF16·데이터·P0·sampling·이미지 budget·채점은 바꾸지 않는다. 연속 protocol은 `async_scheduling=false`, prefix cache 비활성, eager 실행을 유지하면서 `LLMEngine.add_request()`와 `step()`으로 최대 2개 request를 active 상태로 둔다. 완료한 request는 최종 출력만 즉시 저장하고 같은 slot에 다음 독립 request를 넣는다. 이는 두 문제의 완료를 함께 기다리는 고정 batch가 아니다. vLLM protocol의 `deterministic=false`는 PyTorch deterministic-algorithm 강제를 주장하지 않는다는 뜻이며, request seed는 여전히 master 3407에서 ID별로 고정한다. vLLM worker의 image processor에도 같은 pixel budget을 전달하고, 반환된 engine prompt token IDs가 pinned CPU processor의 IDs와 같을 때만 결과를 수용한다. 이 검사는 engine 내부 pixel tensor가 직접 검증되었다는 뜻은 아니다. 새 continuous protocol은 아직 실제 GPU에서 검증되지 않았다.
+백엔드와 batch는 수업 지침 §1.3·§5가 문서화를 조건으로 자유/권장한 엔지니어링 선택이다. 모델·revision·BF16·데이터·P0·sampling·이미지 budget·채점은 바꾸지 않는다. 연속 protocol은 `async_scheduling=false`, prefix cache 비활성, eager 실행을 유지하면서 `LLMEngine.add_request()`와 `step()`으로 최대 2개 request를 active 상태로 둔다. 완료한 request는 최종 출력만 즉시 저장하고 같은 slot에 다음 독립 request를 넣는다. 이는 두 문제의 완료를 함께 기다리는 고정 batch가 아니다. vLLM protocol의 `deterministic=false`는 PyTorch deterministic-algorithm 강제를 주장하지 않는다는 뜻이며, request seed는 여전히 master 3407에서 ID별로 고정한다. vLLM worker의 image processor에도 같은 pixel budget을 전달하고, 반환된 engine prompt token IDs가 pinned CPU processor의 IDs와 같을 때만 결과를 수용한다. 이 검사는 engine 내부 pixel tensor가 직접 검증되었다는 뜻은 아니다. 새 continuous protocol의 3문제 GPU SMOKE와 실제 slot refill은 검증했지만, 900문제 전체 결과는 아직 없다.
 
 연속 실행의 `generation_seconds`는 각 `step()` wall time을 해당 step의 active request 수로 나누어 request에 배분한 분석용 시간이고, 겹쳐 실행되는 request의 실제 지연시간은 `request_latency_seconds`로 별도 기록한다. 따라서 request 시간 합은 전체 elapsed time과 같다고 해석하지 않으며, throughput은 engine invocation wall time으로 계산한다. 기존 `mmmu-val-fast-vllm-32k-v1` 고정 batch protocol은 과거 분석 기록으로 보존하고 새 protocol과 결과를 합치지 않는다.
 
@@ -103,7 +104,7 @@ Options:
 
 현재 제출용 A의 `COMPLETE900` 결과는 없다. 별도 분석 B의 중단된 partial run은 제출 점수에
 사용하지 않는다: 70/900, 시스템 실패 0, EOS 61, `finish_reason=length` 9, 생성 token
-399,758, generation wall 9,936.189초였다. 9개 length row가 294,912 token(73.77%)을
+399,758, generation wall 9,936.189초였다. 해당 partial 결과와 백업은 이후 사용자 요청으로 삭제했으며, 이 수치는 삭제 전 관측이다. 9개 length row가 294,912 token(73.77%)을
 차지했으며, 이 현상 때문에 continuous scheduling protocol을 별도 설계했다. 이 partial
 관측은 새 protocol의 GPU 검증이나 900개 점수가 아니다.
 

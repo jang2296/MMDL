@@ -154,7 +154,7 @@ Ubuntu 24.04/Python 3.12이며 `NVIDIA_REQUIRE_CUDA`를 설정하지 않는다. 
 | `mmmu_val_v1.yaml` | Transformers, batch1, SDPA math | 기존 reference 보존 |
 | `mmmu_val_fast_transformers_v1.yaml` | Transformers, batch1, 자동 SDPA, 토큰 streamer 없음 | 로컬8GB 추가1문제 |
 | `mmmu_val_fast_vllm_v1.yaml` | vLLM0.11.0, 고정 batch2, BF16 GPU-only, 출력 상한32768 | 과거 분석 기록 보존 |
-| `mmmu_val_continuous_vllm_v1.yaml` | vLLM0.11.0, continuous scheduling, 최대 active2, BF16 GPU-only, 출력 상한32768 | 다음 분석/제출 후보; GPU 미검증 |
+| `mmmu_val_continuous_vllm_v1.yaml` | vLLM0.11.0, continuous scheduling, 최대 active2, BF16 GPU-only, 출력 상한32768 | 3문제 GPU SMOKE 통과; 분석900 진행 중 |
 
 모델/processor revision·MMMU900·P0·sampling·이미지 budget·채점은 같다.
 새 `mmmu-val-fast-vllm-32k-continuous-v1`은 사용자 승인으로 Qwen 공식 평가 recipe의 생성 상한32768을 적용한다.
@@ -194,7 +194,8 @@ active 상태로 유지한다. 한 request가 완료되면 최종 출력 row를 
 고정 batch처럼 두 request의 완료를 함께 기다리지 않는다.
 `generation_seconds`는 step wall time을 active request 수로 배분한 분석용 값이고
 `request_latency_seconds`와 분리한다. 전체 처리량은 engine invocation wall time으로 계산한다.
-이 protocol은 실제 GPU 검증 전이며, 기존 고정 batch 결과와 합치지 않는다.
+이 protocol은 실제 3090에서 3문제 SMOKE/slot refill을 검증했으며, 900문제는 아직 진행 중이다.
+기존 고정 batch 결과와 합치지 않는다. [검증 기록](claudedocs/continuous_vllm_20260922.md)을 참고한다.
 worker allocator peak를 얻지 못하면 `null`로 기록하고, GPU 전체 메모리 snapshot 관측값과 구별한다.
 
 단일-role bundle은 명시된 역할의900개만 검증하며 receipt도 해당 job/Pod에만 유효하다.
