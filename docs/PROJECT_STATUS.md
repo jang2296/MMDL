@@ -8,10 +8,20 @@
 - V2는 length/open 기존 판정 유지 한계가 있어 별도 `team-final-answer-v4`를 확정했다.
   일반 설명을 답 선언으로 취급한 후보 버그를 합성 회귀 검사로 수정하고, open은 최종 구간에만 공식 evaluator를 적용한다.
   두900 전체 재채점은479/900·556/900이며 원래 결과와 감사V2를 덮어쓰지 않는다.
-  CPU111 tests/Ruff/mypy24source/Bash 검사 통과. 새 입력·모델 GPU 추론은 아직 검증 전이다.
+  CPU111 tests/Ruff/mypy24source/Bash 검사 통과. 새 입력·모델 GPU 통제 실험은 진행 중이다.
 - CPU900 입력 대조 완료: A는 기존 token수/grid/tensorhash 모두 일치. A→B897개,
   A→C900개 텐서 차이, C최대5627입력. 출력32768 유지, 전체context40960으로 고정한다.
-- GPU A/B/C 및 신규900은 아직 미실행, 유료 Pod 미생성. 승인 조건/출처/명령은
+- 게시 commit `a7fb5fec8d6b2a96c29e4577b351926e1aaba4b9`를 Pod `pdszzbcroakws1`에서
+  clean checkout했다. RTX3090 24576MiB, driver580.65.06, Python3.12.3이며,
+  GPU API 단가$0.22/h에 storage는 별도다. 기존 사용자 비용 상한 철회 범위를 적용한다.
+  exact lock 설치·pip check·CUDA/BF16 doctor·지정 model/MMMU 다운로드를 통과했다.
+  04:55 UTC A의6문항 중4문항을 완료했고 아직 시스템 오류는 없었다. B/C와 신규900은 미완료다.
+  로그는 Pod `/workspace/control-launcher.log`, 결과는 `/workspace/artifacts/runs/`에 기록한다.
+  A/B/C launcher 자체는6개씩 완료 후 멈춘다. 별도 운영 continuation을 등록했다:
+  18개 SMOKE의 고정 commit/설정·coverage·오류0·레코드/코드/이미지 hash·seed·재채점을
+  검사하고 control archive를 만든 뒤 같은 commit의 C full900(`mmdl-input-v2-full`)을 시작한다.
+  현재 후속 프로세스는 대기 중이며 full900 시작/완료를 뜻하지 않는다. 실패하면900을 시작하지 않고 보존한다.
+  후속 로그는 `/workspace/full-launcher.log`다. 자동 Pod 삭제는 없으며 회수·검증 후 삭제한다. 승인 조건/출처/명령은
   [EVALUATION_V2](EVALUATION_V2.md)에 기록한다. 아래9/22의 실행중 표기는 역사 기록이다.
 
 2026-09-22. 최신 운영 문서: 로컬 smoke/부분 검증 → 팀 GitHub 고정 commit의 clean clone →

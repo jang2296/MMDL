@@ -154,7 +154,7 @@ vLLM continuous baseline이다. 아래 표의 R2 원본 parser 점수는 459/900
 
 ## 7. 격차 분석
 
-R2 원본 parser 점수는 51.00%로 수업 비교값 67.4보다 16.40pp 낮다. CPU V2 audit은 저장 raw response를 독립 재생해 64.89%를 얻었고, 900개 입력·answer·raw hash 및 8개 audit test를 확인했다. 이는 새 모델 점수가 아니라 parser/scoring 차이의 측정이다. V2에서 주관식 53개와 `length` 종료 75개는 바꾸지 않았으며, 파싱 개선으로 모든 차이가 설명된다고 단정하지 않는다. 공식 Qwen 경로와의 image budget·전처리·채점/seed 차이, 모델의 시각·수리 추론 오류가 남은 후보이며, 새 team-final-answer-v4와 ABC 입력 조건은 CPU 검증 후 고정했으며, GPU 통제 실험과 신규900은 아직 미실행이다.
+R2 원본 parser 점수는 51.00%로 수업 비교값 67.4보다 16.40pp 낮다. CPU V2 audit은 저장 raw response를 독립 재생해 64.89%를 얻었고, 900개 입력·answer·raw hash 및 8개 audit test를 확인했다. 이는 새 모델 점수가 아니라 parser/scoring 차이의 측정이다. V2에서 주관식 53개와 `length` 종료 75개는 바꾸지 않았으며, 파싱 개선으로 모든 차이가 설명된다고 단정하지 않는다. 공식 Qwen 경로와의 image budget·전처리·채점/seed 차이, 모델의 시각·수리 추론 오류가 남은 후보이며, 새 team-final-answer-v4와 ABC 입력 조건은 CPU 검증 후 고정했다. GPU 통제 실험은 진행 중이고 신규900은 해당 검증 통과 후 실행하도록 대기 중이다.
 <!-- REPORT_DYNAMIC:END -->
 
 ## 8. 기타 특이사항 / 한계

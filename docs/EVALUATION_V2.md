@@ -4,7 +4,7 @@
 
 2026-09-23 사용자 승인: 기존 두900 결과 보존, CPU 재채점/입력 대조,
 소규모 A/B/C 통제 실험, GitHub 고정 commit의 RTX3090 신규900 평가.
-LLM judge·fine-tuning·최종 test는 포함하지 않는다. GPU 실험/신규900은 아직 미실행이다.
+LLM judge·fine-tuning·최종 test는 포함하지 않는다. GPU A/B/C 통제 실험은 진행 중이며 신규900은 미실행이다.
 기존900 결과는47.44%(427/900)와51.00%(459/900)이며 새 채점/추론과 섞지 않는다.
 
 ## V2 원본 감사 재현
@@ -68,7 +68,7 @@ open 최종답 불일치26이다. 시각/지식/계산 원인의 자동 확정�
 결과는 `analysis_exports/mmmu_20260923/team_final_v4/`에 원본과 분리해 저장했다.
 파서 source SHA256: `4ee95ba0d5d9ed27acc01911c27235caf7f192d9187e32e339863f140629dc08`.
 채점 코드 집합 hash: `bff377373e66755b3a2e8e1ed9a40b715ba9f7fdb9c9ffe72d6358b3b57be794`.
-확정 후 소규모/900의 정답을 보고 이 규칙을 바꾸지 않는다. GPU 추론 결과는 아직 없다.
+확정 후 소규모/900의 정답을 보고 이 규칙을 바꾸지 않는다. GPU 통제 실험은 진행 중이며 완결된 비교 결과는 아직 없다.
 
 ## A/B/C 통제 조건과 공식 출처
 
@@ -127,3 +127,30 @@ OOM/시스템 오류, 잘림, 속도/메모리를 확인하고 통과하면 C로
 신규900 명령은 같은 reproduce 명령에서 `--prepare-only`를 빼고 새 job ID를 사용한다.
 다운로드·driver/UVM/BF16·exact lock·smoke·900·재채점·독립 감사·bundle 순서로 실행한다.
 전체 결과 회수/hash 검증 전에는 Pod/결과 볼륨을 삭제하지 않는다.
+
+## 실제 배포 checkpoint — 2026-09-23
+
+실행 코드는 GitHub commit `a7fb5fec8d6b2a96c29e4577b351926e1aaba4b9`로 고정했다.
+RTX3090 Pod `pdszzbcroakws1`에서 exact lock·pip check·BF16·다운로드를 통과했으며,
+A/B/C 통제 실험 진행 중이다. 05:05 UTC에는 A5/6을 완료했고 C full900은 아직 대기 상태였다.
+
+기존 `controlled_eval.sh`는 종료 후 멈추며, 이번 승인 작업용 별도 continuation이 종료를 기다린다.
+18개 SMOKE의6/6 coverage·오류0·고정 commit/설정·코드/레코드/이미지 hash·seed·저장 token metadata와
+CPU 재채점을 검사한다. 검사를 통과하면 control archive를 보존하고 기존 reproduce 명령으로
+`mmdl-input-v2-full`의 C smoke→단일900→재채점→독립 감사→bundle을 실행한다.
+정확도를 기준으로 arm/설정을 선택하지 않으며, 중간 오류가 있으면900을 시작하지 않는다.
+원격 작업 checkout/평가 코드를 고치거나 실행 중 Git pull하지 않았다.
+
+운영 파일은 비공개 `analysis_exports/mmmu_20260923/new_baseline/`에 보존했다.
+guard `verify_controls.py` SHA256: `3ca32a5456b16e1107e09ac94c7c7f8d09c6768ce32e5d0c22950223dfe2b4b2`.
+continuation `continue_full.sh` SHA256: `e5b30dcec4591a36fd329efd3caf00767dab10321456eda15310e35fc3d24dcd`.
+불완전한 A 결과로 guard가 후속 실행을 거부하는 음성 검사를 수행했고 문법/lint와 별도 schema 검토를 통과했다.
+이 운영 guard는 protocol hash를 별도 재구성하지 않으며, CPU/engine token 값의 동일성은 저장 전
+backend assertion에 의존한다. 저장 metadata의 길이/hash 검사와 engine 내부 pixel tensor 검증을 혼동하지 않는다.
+완료 bundle은 `/workspace/artifacts/bundles/mmdl-input-v2-full.tar.gz`,
+private 결과는 `/workspace/artifacts/runs/mmdl-input-v2-full-evaluation/`에 생성될 예정이다.
+
+```bash
+# RunPod 웹 터미널: 통제 실험 / 후속900 단계 로그
+tail -f /workspace/control-launcher.log /workspace/full-launcher.log
+```
