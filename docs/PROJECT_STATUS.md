@@ -25,8 +25,16 @@
 - 새 동시2 protocol `configs/eval/mmmu_val_official_vllm_b2_v2.yaml`은 C와 ID·batch만 다르다.
   기존 independent continuous refill을 재사용한다. 이미지/출력/문맥/seed/scorer 조건 완화는 없다.
   CPU111 tests/Ruff/mypy24source/Bash 통과. GitHub 게시 후 새3090의3문제 smoke→새900을 실행한다.
-  CUDA Graph/async 추가 가속은 미검증 후보이며 이번 실행에 켜지 않는다. GPU 성공/속도는 아직 미측정이다.
+  CUDA Graph/async 추가 가속은 미검증 후보이며 이번 실행에 켜지 않는다. 전체 가속률은 아직 미확정이다.
   승인 조건/출처/명령은 [EVALUATION_V2](EVALUATION_V2.md)에 기록한다. 아래9/22의 실행중 표기는 역사 기록이다.
+- **06:33 UTC 새900 진행 확인:** commit `6d6d4a1a4bed1785e8770902d65e12b54340ba75`,
+  Pod `58nm0qrpgwc4ub`, RTX3090 24576MiB, driver580.126.09, Python3.12.3, API$0.22/h+storage.
+  같은 pinned base image의30GB container/80GB workspace에서 GitHub clean clone→exact lock→pip check→
+  CUDA/BF16→지정 다운로드→동시2 GPU smoke3/3·오류0을 통과했다. 추론 시점의 코드 SHA는 이후 문서 commit과 구분한다.
+  smoke 평가30.717559s, 출력1078tokens,500ms 장치 전체 메모리 관측 최대23,707,254,784bytes(약22.08GiB).
+  과제 점수가 아닌 기능 검사이며 full900 무오류/2배 가속을 보장하지 않는다. KV cache79376tokens.
+  새 `mmdl-official-b2-20260923-evaluation`은06:31:57 UTC 시작해06:33:13 UTC3/900, 진행 중2개, 실패기록0이다.
+  `/workspace/launcher.log`와 `/workspace/artifacts/jobs/mmdl-official-b2-20260923.008-evaluation.log`에서 확인한다.
 
 2026-09-22. 최신 운영 문서: 로컬 smoke/부분 검증 → 팀 GitHub 고정 commit의 clean clone →
 RunPod 단일 `mmmu-val` evaluation 900 추론 → 로컬 회수·검증 → 전용 자원 삭제.

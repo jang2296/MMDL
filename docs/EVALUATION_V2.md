@@ -199,3 +199,29 @@ bash scripts/reproduce.sh --commit "$MMDL_CODE_COMMIT" --job-id mmdl-official-b2
 # 새 Pod의 실행 단계 로그
 tail -f /workspace/launcher.log
 ```
+
+### 새 동시2 GPU 검증·900 시작
+
+추론 commit `6d6d4a1a4bed1785e8770902d65e12b54340ba75`를 새 Pod `58nm0qrpgwc4ub`에서 clean clone했다.
+RTX3090 24576MiB/driver580.126.09/Python3.12.3이며 API$0.22/h에 storage는 별도다.
+검증된 image `runpod/base@sha256:a5aead56b5ed7754235250afface107a8a19646ac34f62c87e5f41eb147fa7b2`와
+30GB container/80GB workspace를 사용했다. SSH에는 Pod 환경변수가 자동 상속되지 않아 API로 확인한
+Pod ID를 launcher에 명시했다. 설치/driver/BF16 검사를 건너뛰지 않았고 모두 통과했다.
+
+3문제 smoke는3/3·오류0으로 완료했다. Accounting526/Agriculture5/Biology547tokens,
+평가30.717559s,500ms 장치 전체 메모리 관측 최대23,707,254,784bytes(약22.08GiB)다.
+Agriculture가 먼저 끝나고 Biology를 보충하여 Accounting과 겹쳐 실행했다. worker allocator peak는 미측정이다.
+저장 backend는 vLLM0.11.0/max_num_seqs2/context40960/지정sampling·이미지와 일치한다.
+KV cache79376tokens이며 이는 가상의40960문맥 두 개를 모두 채우는 용량은 아니다.
+CPU900의 최대입력5627+출력32768 두 요청 합76790은 그보다 작지만 full900의 오류 부재를 미리 보장하지 않는다.
+
+06:31:57 UTC 새900을 시작했다.06:33:13 UTC 확인 시3/900 완료·요청2개 진행 중·실패기록0이다.
+속도 배수나 최종 점수는 아직 확정하지 않는다. 원격 저장 경로는
+`/workspace/artifacts/runs/mmdl-official-b2-20260923-evaluation/`, 완료 bundle 예정 경로는
+`/workspace/artifacts/bundles/mmdl-official-b2-20260923.tar.gz`다.
+local 운영 증거는 `analysis_exports/mmmu_20260923/new_baseline/b2_provision.json`과 `b2_smoke_evidence/`에 있다.
+
+```bash
+# RunPod 웹 터미널: 각 문항 완료/오류 확인
+tail -f /workspace/artifacts/jobs/mmdl-official-b2-20260923.008-evaluation.log
+```
