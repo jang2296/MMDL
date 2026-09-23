@@ -1,12 +1,25 @@
 # AGENTS.md — MMDL: Qwen3-VL-4B 평가·개선·재현
 
-> 기준일: 2026-09-21. 저장소 루트 지침. 실행정책: **로컬 smoke/부분 검증 → GitHub 고정 commit → RunPod 단일 900문제 평가 → 로컬 회수·검증 → 작업 전용 클라우드 자원 삭제**.
+> **2026-09-23 최신 사용자 승인 — 아래 과거 변경 금지/추가 추론 제한보다 우선:**
+> `docs/P0/MMMU_audit` 원본 V2 확보·검토 → 두 저장 실행 CPU 재채점 → 실패 단계 분류 →
+> CPU 입력 대조와 A/B/C 소규모 통제 실험 → 조건 고정·GitHub 게시 → RTX3090 신규900 평가를 진행한다.
+> P0, 지정 모델/processor/revision/BF16/데이터와 공식 sampling recipe, 출력32768은 유지한다.
+> 이미지 전처리/해상도 및 LLM 없는 채점은 별도 version으로 고정하며 원본 결과는 덮어쓰지 않는다.
+> 외부 LLM judge·학습·MMMU test는 승인하지 않았다. 새 baseline 완료 전 기존51.00%를 대체하지 않는다.
+> 감사 V2 코드는 확보되었으며 두 원본900에 독립 재적용하여536/900,584/900을 재현했다(8 tests PASS).
+> V2는 length/open 판정 유지 및 legacy fallback 한계가 있는 진단용 버전이다.64.89%는 새 모델 추론 결과가 아니다.
+> 새 `team-final-answer-v4`는 명시적 최종답 추출+공식 open evaluator를 고정했다. 저장 R1/R2 재채점은
+> 479/900·556/900이며 개발 후보와 원본/V2 원장은 모두 보존했다. 전체111 CPU tests 통과, 새 GPU900은 아직 미실행이다.
+> 다음 조건·근거·확정 상태는 `docs/EVALUATION_V2.md`를 확인한다. 유료 실행은 로컬검사 통과 후에만 시작한다.
+
+> 갱신일: 2026-09-23. 저장소 루트 지침. 실행정책: **로컬 smoke/부분 검증 → GitHub 고정 commit → RunPod 단일 900문제 평가 → 로컬 회수·검증 → 작업 전용 클라우드 자원 삭제**.
+> **현재 확정 상태:** 2,048-token 실행과 32,768-token 연속 처리 실행 모두 900/900 완료·로컬 회수·독립 검증·해당 Pod 삭제 완료. 점수는 각각 **47.44% / 51.00%**다. 최신 실험 사실·한계·후속 추적 기준은 **§0.1**을 우선한다. 아래 과거의 실행 중/초안 표기는 당시 기록이며 새 실행 지시가 아니다.
 
 > **2026-09-22 사용자 변경 승인(아래 이전 운영 제한보다 우선):** 기존 실행은 역사 자료로 보존한다.
 > 별도 가속 protocol(vLLM continuous scheduling, 토큰 streamer 제거)을 구현하고
 > 로컬 smoke 검증→GitHub 고정 commit→단일 3090 평가 run으로 900문제를 검증·회수한다.
 > ‘분석용’과 ‘테스트용/제출용’은 새 평가 역할로 만들지 않으며, 하나의 저장 결과를 점수와 실패 검토에 함께 사용한다.
-> 이미 실행 중인 legacy continuous32k run은 전체900과 독립 검증을 완료하면 canonical 결과의 근거로 사용할 수 있다.
+> legacy continuous32k run은 전체900과 독립 검증을 완료했으며 현재 32k baseline 결과의 근거다. 새 이름으로 같은 900개를 다시 생성하지 않는다.
 > 코드 변경은 실행 중인 Pod에 자동 적용하지 않는다. 추가 사용자 승인에 따라 먼저 끝나는 Pod는 900개 완료 후 로컬 회수·독립 검증을 거쳐 삭제하며, 불필요한 후속 900회는 차단한다.
 > 최초 USD6.80 상한은 과거 승인 기록이며, 사용자가 이후 비용 제한을 철회한 현재 운영 승인과 구분한다.
 > 기존 reference protocol은 보존하며 모델/revision/BF16/데이터/P0/생성/이미지/채점은 변경하지 않는다.
@@ -22,12 +35,125 @@
 ## 0. 에이전트 작업 규칙과 현재 범위
 
 - 적용 지침 전체, Git 루트/상태, 기존 코드·README·설정·테스트·진행 기록, `local_sources/assignment_guidance.md`·`SUBMISSION_TEMPLATE.md`를 확인한다. 기존 작업을 reset하거나 덮어쓰지 않는다.
-- `[사용자]` **로컬은 smoke/필요한 부분 검증, RunPod는 단일 `mmmu-val` 평가 run의 실제 추론 900회**다. 별도 분석용/테스트용 full run을 새로 만들지 않는다. 이미 시작된 legacy continuous32k full run은 완료·독립검증 시 그 저장 결과를 canonical 평가와 실패 검토에 사용할 수 있다.
+- `[사용자]` **로컬은 smoke/필요한 부분 검증, RunPod는 단일 `mmmu-val` 평가 run의 실제 추론 900회**다. 별도 분석용/테스트용 full run을 새로 만들지 않는다. 완료·독립검증된 legacy continuous32k 저장 결과를 baseline 평가와 실패 검토에 함께 사용한다.
 - 확인된 팀 GitHub `MMDL`로 검사된 파일의 commit/push, 승인 예산 내 RunPod 실행·회수, 로컬 검증 후 작업 전용 자원 삭제를 허용한다. 정상 단계별 재승인은 없다. 계정/권한·저장소·가격/예산 상한/최대시간·회수경로 미확정은 유료 배포 전에 확인한다. 무제한 지출 승인이 아니다.
 - 이번에는 평가만 완성한다. MMMU-Pro는 취득/hash 확인만 한다. **향후 승인된 MMMU test/MMMU-Pro full도 RunPod**에서 하되 현재 evaluation에는 포함하지 않는다. 모든 benchmark split/파생본은 학습·증강 금지다.
 - 기존 파일을 우선한다. 중복 구현·빈 학습/증강기·가짜PASS·임시v2/final/new·불필요한 프레임워크/대시보드/문서를 만들지 않는다. 전역/다른 프로젝트 환경, OS/WSL/driver, Codex 모델·추론 강도·지침 한도를 임의 변경하지 않는다.
 - 상태·결정·검증 명령·증거·다음 행동은 `docs/PROJECT_STATUS.md`에 갱신한다. 변경 없는 전체 재독, 대형 로그/900응답 대화 출력, 자동 에이전트 토론/무한 리팩터링을 금지한다. 같은 차단 원인의 수정·검증은 최대3회다. 장시간 작업은 실행장비 프로세스/로그와 완료 대기·드문 확인으로 운영한다.
-- 단일 평가 검증·로컬 회수·전용 자원 삭제 확인 후 즉시 멈춘다. 심층 풀이 분석·개선 연구·학습·발표 제작은 다음 명령 이후다.
+- 단일 평가 검증·로컬 회수·전용 자원 삭제 후 새 유료 실행은 자동 시작하지 않는다. 2026-09-23 사용자 요청으로 1차 결과·설정·문제·개선 추적을 이 파일에 기록한다. 이 문서 갱신은 파서 수정·새 채점 결과 확정·모델 재추론·학습·유료 judge 호출의 승인이 아니다.
+
+## 0.1. 1차 평가 실측·문제·개선 추적 원장 — 2026-09-23
+
+`[실측]`은 저장 결과/receipt로 확인한 사실, `[진단]`은 저장 응답의 읽기 전용 분석, `[미검증]`은 원인 가설/후속 실험이다. **측정값, 수정 시의 산술 예상, 향후 계획을 섞지 않는다.** 이 절은 발표와 이후 비교의 출발점이며 900개 원문을 복제하는 장소가 아니다. 원본 증거 위치는 F항에 고정한다. 다른 문서의 과거 진행 중 표기보다 이 절의 완료 상태가 최신이다.
+
+### A. 두 완료 실행과 실제 설정
+
+| 항목 | R1: 2,048-token reference | R2: 32,768-token continuous baseline |
+|---|---|---|
+| 원본 run ID | `mmdl-val-20260922-3090-assignment` | `mmdl-cont32k-analysis-20260922-analysis` |
+| 실제 추론 commit | `af961a36b2471e978e96efd7347e150cb0bbce00` | `702ed44c4c45f454746ec4b371ad1b7403b67856` |
+| protocol | `mmmu-val-v1` | `mmmu-val-fast-vllm-32k-continuous-v1` |
+| 설정 파일 | `configs/eval/mmmu_val_v1.yaml` | `configs/eval/mmmu_val_continuous_vllm_v1.yaml` |
+| 실행 | Transformers, batch 1, SDPA MATH, deterministic=true | vLLM 0.11.0, 연속 처리, 최대 동시 요청 2, deterministic=false |
+| 생성 상한 / 전체 문맥 | `max_new_tokens=2048` | `max_new_tokens=32768` / `max_model_len=36864` |
+| 완료 / 시스템 오류·누락 | 900/900 / 0 | 900/900 / 0 |
+| 정답 / macro accuracy | **427/900 = 47.44%** | **459/900 = 51.00%** |
+| 수업 비교값 67.4%와 차이 | −19.96 percentage points | −16.40 percentage points |
+| 상한 종료 `length` | **226/900 = 25.11%** | **75/900 = 8.33%** |
+| 자연 종료 | `eos` 674개 | `stop` 825개 |
+| 파싱 실패 `NO_PARSE` | **96개** | **69개**, 모두 객관식·오답 처리 |
+| 생성 token 합 | 776,359 | 3,719,200 |
+| 평가 wall time, 모델 로드 제외 | 49,741.672초 ≈ 13시간 49분 | 57,885.846초 ≈ 16시간 05분 |
+| GPU 메모리 관측 | allocator allocated 13,037,445,120 / reserved 23,595,057,152 bytes | 장치 전체 사용량 표본 최대 22,885,171,200 bytes, 500ms 간격; worker allocator peak는 미측정 |
+
+- **공통 고정 조건:** §2의 지정 Qwen3-VL-4B-Instruct와 모델/processor/tokenizer revision, MMMU revision, BF16·비양자화·미학습 원본 가중치. validation **30과목×30개=900**, 실제 유형은 **객관식 847 / 주관식 53**이다. 전부 객관식이라고 설명하지 않는다. 두 실행의 ID·질문·보기·정답·seed·이미지 순서/grid 및 입력 token 합 **534,018**이 일치함을 확인했다.
+- **프롬프트:** 둘 다 §5의 **P0**. 원본 이미지들을 참조 순서대로 먼저 전달하고 질문/보기를 마지막 user text로 전달한다. MCQ는 `Question: ...\nOptions:\nA. ...\n...\nPlease select the correct answer from the options above.`, open은 `Question: ...`; 원본 hint가 있을 때만 앞에 붙인다. 추가 system/few-shot/CoT 지시 없음. 별도 분석용 프롬프트가 아니다.
+- **생성 공통값:** `do_sample=true, temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.0, presence_penalty=1.5, num_beams=1`. master seed **3407**, 샘플 seed는 `SHA256("3407:{sample_id}")`의 첫 8 bytes를 big-endian 정수로 바꿔 `mod (2**31)` 하는 **팀 정책**이다. Qwen의 난수 소비 순서와 동일하다고 주장하지 않는다.
+- **이미지 공통값:** `min_pixels=262144, max_pixels=1310720`, official processor 소유 resize. 수업 고정 해상도가 아니라 팀이 택한 pixel budget이며 R2에서도 유지했다.
+- **파싱 공통값:** `mmmu-official-no-random-v1`. pinned MMMU 규칙 기반 MCQ 파서에서 무작위 추측을 제거했고, 실패는 `NO_PARSE`·오답으로 처리한다. open은 공식 문자열/수치 정규화 evaluator를 쓴다. **Qwen 평가 코드의 LLM 보조 판정은 사용하지 않았다.** 원본의 임의 추측 대신 실패를 명시하려던 설계이나, 아래 형식 인식 누락이 확인됐다.
+- **R2 실행 세부:** 독립 문제 하나가 끝나면 저장 후 다음 문제를 넣는다. `max_num_seqs=2`, `async_scheduling=false`, eager, prefix cache=false, GPU memory utilization=0.90, tensor parallel=1. presence penalty는 vLLM native generated-only 적용; R1은 custom generated-only 구현이다. EOS/stop/기본값을 포함한 전체 실효 설정은 각 `backend.json`·샘플 기록을 근거로 한다.
+- **실제 장비/환경:** 두 full run 모두 **RTX 3090 24GB GPU-only**, CPU/disk weight offload 없음. Python 3.12.3, Torch 2.8.0+cu128, Transformers 4.57.1. R1 driver 565.57.01/Linux 6.8.0-50, R2 driver 580.65.06/Linux 6.8.0-57. **4090 실측 완료가 아니다.** R2 RAM peak는 부모 프로세스만 포함하므로 worker 포함 총 RAM으로 쓰지 않는다. 표의 GPU 메모리 두 지표도 직접 비교하지 않는다.
+- **paired 결과:** 둘 다 정답 347, 둘 다 오답 361, R1 오답→R2 정답 112, 정답→오답 80. 순증 **32개 / +3.56pp**다. 길이·백엔드·코드·환경이 함께 바뀌었으므로 **순수 토큰 효과나 fine-tuning 효과가 아니다.** R2 생성량은 약 4.79배이고 전체 평가 시간은 더 길다. 이 비교만으로 가속 배율을 주장하지 않는다.
+
+### B. 출력 상한·장문 반복에서 확인한 한계
+
+- 2,048은 초기 자원/시간 예산을 위한 팀 선택이며 공식 권장값으로 쓰지 않는다. R1 226개가 상한에 도달해 답변이 완결되지 않을 위험이 실제로 컸다. 이후 사용자 승인으로 Qwen MMMU 평가 recipe의 출력 상한 **32,768**을 채택했다. 이는 **최대 생성량**이지 항상 그만큼 생성하라는 뜻이 아니다. 지정 model card의 일반 VL 안내 **16,384**와 평가 recipe **32,768**은 출처가 다름을 남긴다.
+- R2도 75개가 **정확히 32,768 token**에서 잘렸다. 그중 정답 24 / 오답 51, 파싱 실패 13이다. 자연 종료 825개는 정답 435 / 오답 390이다. 잘린 응답이 항상 오답인 것도, 상한을 올리면 반드시 정답이 되는 것도 아니다.
+- 저장 응답에서 같은 문장/계산을 반복하는 장문 사례를 관측했다. **반복 현상은 관측, 발생 원인과 penalty/이미지/샘플링의 기여도는 미검증**이다. 출력 길이 부족만으로 모든 오답과 긴 실행 시간을 설명하거나 더 큰 상한을 자동 적용하지 않는다.
+- R2 최대 입력은 2,655 token, **동일 샘플의 입력+출력 실측 최대는 35,390**으로 문맥 한도 36,864 안이다. 입력 최댓값과 출력 상한을 단순 합친 35,423은 보수적 합계이지 실제 단일 샘플 최댓값이 아니다. 따라서 이번 75개의 상한 종료를 작은 전체 문맥 때문에 출력 32,768을 확보하지 못한 사례라고 설명하지 않는다.
+- `length`는 종료 사유, `NO_PARSE`는 추출 상태다. 두 집합은 겹치므로 단순 합산하지 않는다. R2 오답 중 `(length 또는 NO_PARSE)`는 **51+69−13=107개**이며, 이는 수정하면 107개가 모두 정답이 된다는 뜻이 아니다.
+
+### C. 확정된 파싱 문제와 점수 해석
+
+- 원인 위치: `src/mmdl/evaluation/parsers.py::parse_mcq_response`. `(A)` → 공백으로 둘러싸인 `A` → **응답이 5단어를 초과할 때만** 보기 문구 검색 순이다. 끝의 punctuation 제거는 내부 `A. 내용`의 점을 없애지 못한다. 짧은 `LETTER. option text` 응답을 놓칠 수 있고, 여러 후보가 나오면 마지막 출현을 택한다.
+- `[진단]` R2 `NO_PARSE` 69개 중 **32개**는 응답 전체가 유효한 `LETTER. 해당 보기 원문`과 정확히 일치했다. 그중 **24개는 정답 label과도 일치했지만 오답 처리**됐다. 32개 모두 `stop` 종료라서 이 24개의 손실은 토큰 잘림 때문이 아니다. 재현 기준: `re.fullmatch(r'([A-Z])\.\s*(.+)', raw.strip(), re.S)` 후 label 범위와 본문/해당 보기의 `strip()` 일치 검사; 정답은 추출 후 비교에만 사용한다.
+- 같은 기준으로 R1 `NO_PARSE` 96개 중 **31개**가 형식 일치, 그중 **23개**가 정답 label 일치였다. R1에도 같은 추출 문제가 있었으므로 후속 SC1은 R2만이 아니라 두 실행을 같은 scoring version으로 대조한다. 원래 R1 427/900은 변경하지 않는다.
+- 진단 사례 ID: `validation_Agriculture_1`, `validation_Art_10`. 원문/보기는 F항의 비공개 원본에서 확인한다. 이 두 사례만으로 만든 예외 처리나 정답 기반 파싱은 금지한다.
+- **24개만 바로잡고 나머지가 같다는 산술 가정**이면 `(459+24)/900 = 53.67%`, +2.67pp다. **새 파서로 전체 재채점한 실측 성적이 아니다. 현재 확정 원본 점수는 51.00%다.** 수정 규칙이 이미 PARSED인 응답에 미치는 영향도 검증해야 한다.
+- 69개 NO_PARSE가 전부 정답으로 바뀐다고 가정해도 `(459+69)/900 = 58.67%`다. 이는 **NO_PARSE 집합만의 산술 상한**이지 모든 파서 오류의 상한이나 개선 예측이 아니다. 이미 PARSED인 오답의 잘못된 답 추출 여부는 별도 검토 대상이다.
+- R2 유형별 결과: 객관식 **440/847**, 주관식 **19/53**. 모델 지식/시각 이해의 오답과 출력 형식/채점 손실을 분리해야 한다. 공식 점수와 격차 전부를 모델 능력 부족이나 parser 하나에 귀속하지 않는다.
+
+### D. 공식 Qwen 평가와 같은 것·다른 것·아직 모르는 것
+
+| 비교 항목 | 이번 실행과 공식 공개 코드의 관계 | 해석 / 다음 확인 |
+|---|---|---|
+| 모델·P0·sampling | 지정 Instruct/BF16, 기본 P0, T/p/k/penalty 및 R2 출력 32,768은 채택 근거가 있다 | Thinking 모델/CoT 프롬프트로 실행한 것이 아님 |
+| 이미지 budget | 우리 262,144–1,310,720 pixels / Qwen `infer_instruct.sh` 1,003,520–4,014,080 pixels | 더 작은 시각 입력이 세부 문자/도형 인식에 영향을 줄 가능성; 실제 점수 영향은 미측정 |
+| 이미지 처리 경로 | Qwen `qwen_vl_utils.process_vision_info` 경로와 우리 pinned processor/vLLM 경로가 다름 | 우리 reference 입력 token/grid 검증과 **엔진 내부 pixel tensor 동등성 검증은 별개**; 후자는 미완료 |
+| 객관식 채점 | Qwen은 option/text 규칙 추출 후 실패 시 LLM 보조 판정, 재시도 소진 시 random fallback; 우리는 MMMU 규칙 변형, 실패 오답 | 저장 raw response로 추출 차이부터 분리. 공식 방식이면 반드시 정답이 된다고 가정하지 않음 |
+| 주관식 채점 | Qwen 공개 코드는 **채점 단계에서** 정답/Other Answers 후보로 판정; 우리는 공식 MMMU open 정규화 | gold를 baseline 추론 프롬프트에 넣었다는 뜻이 아님; 두 점수의 직접 동등성 미검증 |
+| seed·실행 환경 | Qwen README seed3407, 참고 실행 코드 seed42; 우리는 per-sample SHA seed / 고정 vLLM 0.11.0 | 같은 sampling 숫자만으로 응답 동일성을 보장하지 않음 |
+| 데이터 취득 | 수업 지정 HF validation 900 / Qwen 공개 코드 `MMMU_DEV_VAL.tsv` | TSV와 HF의 ID·이미지·split 전체 동등성 대조 미완료. 임의로 dev 포함본으로 교체하지 않음 |
+
+공식의 `</think>` 이후 추출 처리 차이도 확인했으나 R2 900개에는 해당 종료 태그가 **0개**여서 관측된 원인으로 세지 않는다. **67.4는 과제에 제시된 비교값**이며, 그 수치를 만든 모든 내부 실행 조건을 재현·입증한 상태가 아니다. 위 차이는 확인된 설정 차이이지 각각의 점수 손실을 정량 입증한 목록이 아니다.
+
+출처 고정(2026-09-23 대조): Qwen commit `96588727e44c78b25ba03ea03b8e12f7e64fd0da`의 [prompt/추론](https://github.com/QwenLM/Qwen3-VL/blob/96588727e44c78b25ba03ea03b8e12f7e64fd0da/evaluation/mmmu/run_mmmu.py), [Instruct 실행 설정](https://github.com/QwenLM/Qwen3-VL/blob/96588727e44c78b25ba03ea03b8e12f7e64fd0da/evaluation/mmmu/infer_instruct.sh), [채점](https://github.com/QwenLM/Qwen3-VL/blob/96588727e44c78b25ba03ea03b8e12f7e64fd0da/evaluation/mmmu/eval_utils.py), [데이터](https://github.com/QwenLM/Qwen3-VL/blob/96588727e44c78b25ba03ea03b8e12f7e64fd0da/evaluation/mmmu/dataset_utils.py). 우리 parser의 원류는 [MMMU evaluator](https://github.com/MMMU-Benchmark/MMMU/blob/268471d0d488258990025331c7528359c324aa25/mmmu/utils/eval_utils.py), commit `268471d0d488258990025331c7528359c324aa25`다. 고정 model card는 W2, 수업 조건은 S1, 추가 대조 근거는 `docs/SOURCE_REVIEW.md`다.
+
+### E. 구현·환경 문제의 경과와 재현 한계
+
+- **로컬 사전 검사(역사 기록):** RTX 5060 8GB의 CPU weight offload에서 Accounting 30개는 18/30, `length` 15/30, 평가 22,194.080초였다. 추가 다중이미지/open 3개도 검증했다. 이는 full900 점수가 아니다. 가속 Transformers 로컬 1문제는 312 token/EOS, 생성 174.740초로 완료했으나 **vLLM 검증을 대신하지 않는다**. 상세 증거는 `docs/PROJECT_STATUS.md`의 로컬 smoke/partial 및 외부 `setup/*audit.json` 참조.
+- **설치와 호스트 문제 분리:** 초기 5090의 `cuInit=999`, UVM open `EIO(5)`는 호스트 CUDA/UVM 접근 문제로 진단됐고 정확한 커널 원인은 미확정이다. 모델 추론 전 실패·로그 회수 후 삭제했다. 초기 3090은 호스트 CUDA12.7과 cu128 컨테이너의 `cuda>=12.8` 부팅 조건 불일치로 시작하지 못했다. 공식 base image digest로 교체한 뒤 같은 평가 lock으로 CUDA/UVM/BF16 검사를 통과했다. 모델/BF16을 낮춰 해결한 것이 아니다.
+- 성공한 R1 base image: `runpod/base@sha256:a5aead56b5ed7754235250afface107a8a19646ac34f62c87e5f41eb147fa7b2`. 재현 shell은 clone commit·exact lock·`pip check`·실제 GPU/driver·CUDA/UVM·BF16·mount/disk·pinned model/data 검사를 수행한다. **부팅 자체가 안 되는 이미지는 shell이 고칠 수 없으므로 배포 전 호스트/이미지 조건 확인이 필요하다.** `nvidia-smi` CUDA 표시는 설치된 Torch runtime 버전과 구별한다.
+- **가속 경과:** MATH attention/매 token CPU 진행 전송 경로의 비용을 검토하여 별도 fast protocol을 만들었다. 초기 vLLM 고정 batch2는 두 요청 묶음이 끝날 때까지 기다리는 구조였고, 이후 `LLMEngine.add_request()/step()`로 최대2 요청을 유지·개별 완료 즉시 refill하도록 바꿨다. 3문제 GPU smoke에서 앞 요청 미완료 중 다음 요청 투입을 관측했다. kernel 변경·로그 전송 제거·연속 처리 각각의 단독 속도 기여는 측정하지 않았다.
+- 이전 고정 batch 32k **70문항 partial은 사용자 요청으로 Pod·로컬 결과/압축 사본까지 삭제**했다. 삭제 전 관측은 61 EOS / 9 length, 생성 399,758 token 중 상한9개가 294,912 token이었다. 이는 과거 운영 관측이며 현재 원문 재검증이 가능한 R1/R2 결과가 아니다. 900개와 합치거나 복원 가능하다고 하지 않는다.
+- R1/R2는 각각 전체 raw 재채점·900 고유 ID/30과목·입력/코드/레코드 hash·PNG 959개·HTML 참조를 로컬에서 검증한 뒤 해당 Pod를 삭제했다. R1 Pod `2j4knzy36jtzmv`는 **2026-09-22 14:36:23 UTC**, R2 `vf8wla9q5v9gm8`는 **2026-09-23 01:03:17 UTC** 삭제 기록이 있다. 삭제 후 조회 부재를 확인했으며 추가 full900은 시작하지 않았다. 이 시점의 자원 정리 기록을 미래 계정 상태로 가정하지 않는다.
+
+### F. 원본·공유 묶음·보고서 상태
+
+Windows 보관 루트는 **`C:\projects\multimodel\analysis_exports\mmmu_20260923\`**이며 Git 제외 대상이다. `originals/`는 검증한 WSL `$MMDL_ARTIFACT_ROOT/recovered/`의 두 회수 폴더를 복사한 것으로 WSL 원본도 보존했다.
+
+| 증거 | 보관 루트 아래 상대경로 |
+|---|---|
+| R1 전체 회수본 | `originals/baseline-2048-complete-20260922/` |
+| R1 개별 결과 | 위 폴더의 `extracted/artifacts/runs/mmdl-val-20260922-3090-assignment/` |
+| R2 전체 회수본 | `originals/continuous32k-complete-20260923/` |
+| R2 개별 결과 | 위 폴더의 `extracted/runs/mmdl-cont32k-analysis-20260922-analysis/` |
+| 먼저 웹 GPT에 올릴 자료 | `upload/mmmu_analysis_text.zip` — **2,955,323 bytes / 2.82 MiB**, 두 실행 각900 raw 응답·paired900·과목별30·설정/환경/프롬프트 |
+| 필요할 때 추가할 이미지 | `upload/mmmu_images.zip` — **324,943,322 bytes / 309.89 MiB**, 두 실행이 공유한 고유 PNG **959개** |
+| 분할 열람·무결성 | `upload/by_subject/` 60개 파일, `SHA256SUMS.txt`, `README.md` |
+
+개별 run의 `summary.json`, `subject_scores.csv`, `predictions.jsonl`, `resolved_eval_config.yaml`, `resolved_hardware_config.yaml`, `backend.json`, `environment.json`, `run_manifest.json`과 회수 루트의 `recovery_receipt.json`을 근거로 사용한다. 공유용 텍스트 ZIP은 raw 응답을 자르지 않았지만 token ID 배열·tensor·전체 로그를 생략했다. 상세 검증에는 `originals/`를 사용하며 benchmark/이미지를 학습·증강에 재사용하지 않는다.
+
+- R1 원본 archive `results.tar.gz`: **332,612,462 bytes**, SHA-256 `11cba0dff07a228c7ee70332f3b10859b66894a9349687507017c5072a3444e6`.
+- R2 원본 archive `mmdl-cont32k-analysis-20260922.tar.gz`: **350,207,727 bytes**, SHA-256 `67d2734d909aca42043d12ae17ed5364cf50d3cb19fbbec25504d073b7cc7416`. supplement/receipt도 함께 보존한다. 모델 가중치·전체 HF cache·venv가 담긴 배포본은 아니다.
+- 원본 ID의 `assignment`/`analysis` 문자열은 추적용으로 유지한다. 지금도 별도 테스트용/분석용 모델·프롬프트가 있다는 의미가 아니다.
+- **보고서 반영은 별도 미완료 항목:** 이 원장 작성 시 `Assignment_1.md`와 `reports/mmmu_baseline.md`에는 최종 R2 수치·파싱 진단이 아직 반영되지 않았다. 이후 S1/S2를 따라 함께 갱신하고, 공식값과 차이 진단의 **1000자 제한은 제출 보고서**에 적용한다. 이 원장을 보고서 제출 완료로 간주하지 않는다.
+
+### G. 다음 개선을 추적하는 방법과 발표 원칙
+
+| 추적 ID / 상태 | 변경·확인 대상 | 완료에 필요한 증거 |
+|---|---|---|
+| R1 / COMPLETE | 초기2048 평가 | 위 원본427/900·commit·receipt 보존 |
+| R2 / COMPLETE | 32768+vLLM 연속 처리 평가 | 위 원본459/900·commit·receipt 보존; 현 baseline |
+| D1 / DIAGNOSED | 짧은 `LETTER. 보기` 파싱 누락 | 32개 형식 일치/24개 정답 손실, 원인 함수와 읽기 전용 진단 기준; 수정 완료 아님 |
+| SC1 / PLANNED | 일반화한 parser 수정·새 scoring version | 합성 회귀 검사 후 **동일 저장 raw900 전체** 재채점, old/new 답·점수 차이 및 PARSED 회귀 확인; R1/R2 원본 덮어쓰기 금지 |
+| SC2 / PLANNED | Qwen 규칙/LLM 보조 채점과 대조 | MCQ/open별 차이 분리, judge 모델/버전/프롬프트/비용 기록; 유료 API는 별도 승인 전 호출 금지 |
+| I1 / PLANNED | 이미지 budget/전처리 동등성·장문 반복 원인 | 사전 고정 표본/가설, 한 요인씩 바꾼 protocol, 길이/반복/점수/시간/메모리 함께 측정; 900 재추론은 새 승인 필요 |
+| T1 / NOT STARTED | 실패 유형→외부 데이터→실제 fine-tuning | MMMU/MMMU-Pro 오염 차단·학습 manifest·parameter update·고정 checkpoint·동일 평가 조건 비교 |
+
+후속 기록은 **날짜 → 문제/근거 ID → 가설 → 변경한 단일 요인과 유지 조건 → 코드 commit·protocol/scoring version·환경 → 전후 정답 수/파싱 실패/length/시간·메모리 → 회귀·한계 → 증거 경로·상태** 순으로 이 원장에 덧붙인다. 실패한 실험도 삭제해 성공만 남기지 않는다. 현재 요청은 기록이며 PLANNED 항목의 실행 승인이 아니다.
+
+발표에서는 **① 초기 상한의 한계 → ② 연속 처리와32k 적용 후 관측 변화 → ③ 남은 반복/파싱/공식 평가 차이 → ④ 원인을 분리할 다음 실험 → ⑤ 외부 데이터와 학습 계획** 순서로 연결한다. **47.44→51.00%는 실행 조건 묶음의 관측 변화**, **53.67%는 아직 가정 계산**, **학습 개선 성과는 아직 없음**을 명시한다. 점수 상승을 위해 프롬프트/파서를 바꿨다면 모델 학습 성능과 분리하고, baseline과 fine-tuned 모두 같은 최종 평가/채점 조건으로 비교한다.
 
 ## 1. 프로젝트·근거 자료
 
@@ -144,7 +270,9 @@ MMMU는 지정 validation30config×30 고유ID/유형을 검증한다. `MMMU_DEV
 
 `[설계]` 로컬 smoke와 RunPod 단일 평가 run, 이후 fine-tuned MMMU 평가에 **같은 평가 protocol**을 사용한다. 모델/processor/BF16, 데이터 revision/순서, 이미지 변환, P0, 생성/seed/길이, parser/scoring/실패 처리를 고정한다. backend·batch·attention은 선택한 protocol에 기록한다. smoke/evaluation은 실행 범위이며 서로 다른 점수 역할이 아니다. legacy A/B run은 역사 자료로 보존하고 새 run과 섞지 않는다.
 
-### 공통 초안: `configs/eval/mmmu_val_v1.yaml`
+### 역사적 초안: `configs/eval/mmmu_val_v1.yaml`
+
+아래 DRAFT/2048 발췌는 초기 설계 이력이다. 실제 R1은 고정 설정으로 완료했고, 현재 채택한 R2는 `configs/eval/mmmu_val_continuous_vllm_v1.yaml`의 FROZEN/32768이다. 최신 실측·선택 근거는 §0.1을 따른다.
 
 ```yaml
 status: DRAFT
@@ -202,7 +330,7 @@ P0 파일·chat template·입력 변환을 hash로 고정한다. 이미지 누�
 
 ## 6. 로컬 5060 / RunPod 4090 하드웨어 profile
 
-`[사용자 전제]` 노트북 RTX 5060 8GB·RAM24GB, RunPod 기본 대상은 **단일 RTX 4090 24GB GPU-only**다. 아래 값은 weight 배치 초안이며 실제 측정/성공 보장이 아니다.
+`[사용자 전제]` 노트북 RTX 5060 8GB·RAM24GB, 재현 대상은 **단일 RTX 4090 24GB GPU-only**다. 사용자 승인으로 이번 full900 두 실행은 `configs/hardware/rtx3090_24gb.yaml`의 **RTX 3090 24GB**에서 완료했다(§0.1). 아래 4090 값은 weight 배치 초안이며 실제 측정/성공 보장이 아니다.
 
 | profile 항목 | rtx5060_8gb | rtx4090_24gb |
 |---|---|---|
@@ -349,14 +477,14 @@ CPU CI는 고정계약/금지override·정답누출·이미지/주관식·parser
 | 로컬 회수 | hash·재채점·coverage·열람·receipt |
 | 자원 정리 | 전용Pod/storage 삭제·잔존조회 |
 
-미실행/실패를 PASS로 채우지 않는다. 제출은 검증된 단일900 결과와1000자 이내 근거 기반 격차 진단이다. 심층 분석은 보류한다. 교수님은 공개코드commit→lock→4090 doctor→pinned artifact/hash→같은eval→재채점으로 재현한다. RunPod는 수업 강제 provider가 아니다. checkpoint 교체 재평가에는 재학습이 필요 없고 재학습 재현은 별도 요청이다.
+미실행/실패를 PASS로 채우지 않는다. 제출은 검증된 단일900 결과와1000자 이내 근거 기반 격차 진단이다. 사용자 요청으로 확인한 1차 진단과 후속 미실행 항목은 §0.1에 구분한다. 교수님은 공개코드commit→lock→4090 doctor→pinned artifact/hash→같은eval→재채점으로 재현한다. RunPod는 수업 강제 provider가 아니다. checkpoint 교체 재평가에는 재학습이 필요 없고 재학습 재현은 별도 요청이다.
 
 ## 13. 진행·제출·발표
 
 `[수업: S3 pp.7,19–21; S1 §4; S8]` 팀장 public repo, 전체 팀원 collaborator,
 각자 계정 commit/PR, default branch에 최종 병합을 따른다.
 Assignment 본문은 `reports/mmmu_baseline.md`, 기존 경로에는 링크를 둔다.
-전체 수업 흐름은 환경/입력/채점→baseline→실패분석→보고서/발표다. 현재 goal은 단일 evaluation·자료 회수·템플릿 기록·클라우드 정리까지만 수행한다.
+전체 수업 흐름은 환경/입력/채점→baseline→실패분석→보고서/발표다. 평가·회수·클라우드 정리는 완료했고 현재 요청은 1차 실험 원장 작성이다. 템플릿 보고서 최종 반영·발표 제작·학습은 각각의 완료 증거와 요청 범위를 확인한다.
 Assignment 마감은 **9/28 23:59**, 첫 발표는 학습 완료 보고가 아니라 개선 계획이다.
 
 | PPP #1 | 팀 순서 |
@@ -392,6 +520,6 @@ PPT/PDF·HDMI 노트북/강의실 PC·다음 팀 대기를 준비한다.
 | W11 | RunPod storage: `https://docs.runpod.io/pods/storage/types` |
 | W12 | RunPod pricing: `https://docs.runpod.io/pods/pricing` |
 
-W10–W12는2026-09-21 공식 문서 확인 근거다. 배포 시 가격/CLI/API/정리 동작을 다시 확인한다. 현재 구현·로컬30·A/B·실제4090·회수/삭제·학습/final은 `PROJECT_STATUS.md`의 실증거로 판정한다. 사용자 실행 요약은 재확인 전 사용자 보고값이다. test 정답/revision/절차 미확정 시 prediction export와 점수를 구별한다.
+W10–W12는2026-09-21 공식 문서 확인 근거다. 배포 시 가격/CLI/API/정리 동작을 다시 확인한다. 과거 구현·로컬30·환경 문제는 `docs/PROJECT_STATUS.md`, 2026-09-23 완료 상태·결과·진단·회수/삭제 증거는 **§0.1과 연결된 원본 receipt**로 판정한다. 실제4090·학습/final은 미실행이다. 사용자 실행 요약은 재확인 전 사용자 보고값이다. test 정답/revision/절차 미확정 시 prediction export와 점수를 구별한다.
 
 기존 구현가이드/검증 기록의 필요 구간만 활용한다. 지침 byte·상위/하위 합산 한도·실제 로드 목록을 확인한다. 자동로딩에서 잘렸다면 최초 작업 때 누락 구간을 명시적으로 읽되 한도를 임의 변경하거나 미로딩 구간을 읽었다고 하지 않는다.

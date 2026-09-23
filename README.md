@@ -5,6 +5,10 @@ Assignment 1의 고정 BF16 모델과 validation 900문제를 평가한다.
 P0·generation·공식 parser 근거는 [SOURCE_REVIEW](docs/SOURCE_REVIEW.md)에 있다.
 MMMU-Pro 10-way는 다운로드·해시 확인만 하며 평가하지 않는다.
 
+2026-09-23: 기존 두900 결과의 원본 V2 감사 코드를 확보하여536/900·584/900을 CPU 재현했다.
+이는 원래427/900·459/900과 구분되는 재채점이다. 새 LLM 없는 채점·공식 이미지 경로의
+[A/B/C 통제 및 신규3090 평가 절차](docs/EVALUATION_V2.md)를 진행 중이며, 신규900 완료를 뜻하지 않는다.
+
 ## 환경
 
 Python 3.12 Linux/WSL에서 저장소 밖에 환경을 만든다. Windows GPU driver를 유지한다.

@@ -41,6 +41,8 @@ def arguments(argv=None):
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--prepare-only", action="store_true",
+                        help="Install, probe and download only; no smoke or full inference")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,60}", args.job_id):
         parser.error("Invalid job ID")
@@ -227,7 +229,8 @@ def execute(args, root):
                "suite": args.suite, "backend": backend, "lock_sha256": sha256_file(lock),
                "protocol_sha256": sha256_file(args.protocol),
                "hardware": Path(args.hardware).name, "hardware_sha256": sha256_file(args.hardware),
-               "runs": {"evaluation": f"{args.job_id}-evaluation"}}
+               "prepare_only": args.prepare_only,
+               "runs": {} if args.prepare_only else {"evaluation": f"{args.job_id}-evaluation"}}
     if job_file.exists():
         job = read_json(job_file)
         if not args.resume or any(job.get(key) != value for key, value in binding.items()):
@@ -324,6 +327,10 @@ def execute(args, root):
         _validate_doctor_gpu(artifacts / "jobs" / f"{args.job_id}.doctor.json", args.hardware)
         stage("download", [python, "-m", "mmdl.data.download", "--data-root", paths["MMDL_DATA_ROOT"],
                             "--cache", paths["HF_HOME"], "--artifact-root", artifacts, "--skip-pro"])
+        if args.prepare_only:
+            job.update(status="PREPARED", logs_closed=True, ended_at=datetime.now(timezone.utc).isoformat())
+            write_json(job_file, job)
+            return
         common = ["bash", "scripts/eval.sh", "--protocol", args.protocol, "--hardware", args.hardware,
                   "--model-ref", args.model_ref, "--model-path", args.model_path, "--data-root", data,
                   "--artifact-root", artifacts, "--public-root", public, "--require-commit", args.commit,
@@ -362,8 +369,9 @@ def main(argv=None):
     if not args.execute:
         print(json.dumps({"status": "DRY_RUN", "job_id": args.job_id, "commit": args.commit,
                           "suite": args.suite,
-                          "steps": ["clean GitHub checkout", "exact-lock venv", "doctor", "pinned download",
-                                    "one smoke", "one evaluation (900 samples)", "verify and bundle"],
+                          "prepare_only": args.prepare_only,
+                          "steps": ["clean GitHub checkout", "exact-lock venv", "doctor", "pinned download"] +
+                                   ([] if args.prepare_only else ["one smoke", "one evaluation (900 samples)", "verify and bundle"]),
                           "external_gate": "persistent volume; strict approved budget and STOP watchdog, or explicit user_waived cost policy"}))
         return
     execute(args, Path(__file__).resolve().parents[3])

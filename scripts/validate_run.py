@@ -8,8 +8,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from PIL import Image
+import yaml
 
-from mmdl.evaluation.parsers import score_response
+from mmdl.evaluation.parsers import score_with_parser
 from mmdl.runtime.artifacts import digest, read_json, resolve_image, sha256_file
 from mmdl.runtime.contracts import SUBJECTS, sample_seed
 
@@ -41,6 +42,7 @@ def validate(run_dir, public_dir):
     if managed:
         assert re.fullmatch(r"[0-9a-f]{40}", identity.get("git_commit", "")), "Missing fixed commit"
         assert run_dir.name == f"{identity['job_id']}-{identity['run_role']}", "Wrong job/run role"
+    eval_config = yaml.safe_load((run_dir / "resolved_eval_config.yaml").read_text())
     invocations = {p.stem: read_json(p) for p in (run_dir / "inference_invocations").glob("*.json")}
     inference_ids, invocation_ids, image_paths, checked_images = set(), set(), set(), set()
     rows = [read_json(p) for p in sorted((run_dir / "samples").glob("*.json"))]
@@ -92,7 +94,8 @@ def validate(run_dir, public_dir):
             assert invocation["attempted_ids"].count(row["id"]) == 1
             inference_ids.add(iid)
             invocation_ids.add(vid)
-        score = score_response(row["raw_response"], row["question_type"], row["options"], row["answer"])
+        score = score_with_parser(row["raw_response"], row["question_type"], row["options"], row["answer"],
+                                  eval_config["parser"], row.get("finish_reason"))
         assert all(row[k] == v for k, v in score.items()), row["id"]
         correct += row["correct"]
     assert summary["correct"] == correct

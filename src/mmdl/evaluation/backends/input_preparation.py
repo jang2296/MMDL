@@ -20,10 +20,11 @@ def tensor_identity(tensor: Any) -> dict[str, Any]:
     }
 
 
-def prepare_inputs(processor: Any, model_config: Any, messages: list[dict[str, Any]], images: list[Any]) -> dict[str, Any]:
+def prepare_inputs(processor: Any, model_config: Any, messages: list[dict[str, Any]], images: list[Any],
+                   **processor_kwargs: Any) -> dict[str, Any]:
     """Apply the pinned processor once and validate its actual image tensors."""
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = processor(text=[text], images=images, return_tensors="pt")
+    inputs = processor(text=[text], images=images, return_tensors="pt", **processor_kwargs)
     if "pixel_values" not in inputs or "image_grid_thw" not in inputs:
         raise ValueError("Official processor did not return image tensors and grid")
     if inputs["image_grid_thw"].shape[0] != len(images):
@@ -44,3 +45,30 @@ def prepare_inputs(processor: Any, model_config: Any, messages: list[dict[str, A
         "input_tensors": identities,
         "input_sha256": digest(identities),
     }
+
+
+def prepare_protocol_inputs(processor: Any, model_config: Any, messages: list[dict[str, Any]],
+                            images: list[Any], image_cfg: dict[str, Any]) -> tuple[dict[str, Any], list[Any]]:
+    """Use the same image path for the CPU reference and vLLM; never resize twice."""
+    policy = image_cfg.get("preprocessing", "hf_processor")
+    if policy == "hf_processor":
+        return prepare_inputs(processor, model_config, messages, images), images
+    if policy != "qwen_vl_utils_0_0_14":
+        raise ValueError(f"Unknown image preprocessing: {policy}")
+    from importlib.metadata import version
+
+    from qwen_vl_utils import process_vision_info
+
+    if version("qwen-vl-utils") != "0.0.14":
+        raise RuntimeError("The official preprocessing protocol pins qwen-vl-utils==0.0.14")
+    # The utility only reads image blocks; the original P0 text and ordering are unchanged.
+    vision_messages = [{"role": "user", "content": [
+        {"type": "image", "image": image, "min_pixels": image_cfg["min_pixels"],
+         "max_pixels": image_cfg["max_pixels"]} for image in images]}]
+    processed, videos = process_vision_info(
+        vision_messages, image_patch_size=processor.image_processor.patch_size)
+    if videos is not None or processed is None or len(processed) != len(images):
+        raise ValueError("Official image preprocessing changed image coverage")
+    item = prepare_inputs(processor, model_config, messages, processed, do_resize=False)
+    item["processed_image_sizes"] = [list(image.size) for image in processed]
+    return item, processed

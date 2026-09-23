@@ -47,6 +47,28 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             placement_kwargs(hw, 2 * 1024**3, 10 * 1024**3)
 
+    def test_control_protocols_freeze_sampling_scoring_and_image_paths(self):
+        configs = []
+        for arm in ("a", "b", "c"):
+            cfg, hw = load_configs(ROOT / f"configs/eval/mmmu_val_control_{arm}_v2.yaml",
+                                   ROOT / "configs/hardware/rtx3090_24gb.yaml")
+            configs.append(cfg)
+            for section, key, value in [("image", "max_pixels", 42),
+                                        ("generation", "max_new_tokens", 2048),
+                                        ("execution", "max_model_len", 36864),
+                                        ("execution", "batch_size", 2)]:
+                changed = copy.deepcopy(cfg)
+                changed[section][key] = value
+                with self.assertRaises(ValueError):
+                    validate_configs(changed, hw)
+            changed = copy.deepcopy(cfg)
+            changed["parser"] = "mmmu-official-no-random-v1"
+            with self.assertRaises(ValueError):
+                validate_configs(changed, hw)
+        for key in ("model", "dataset", "prompt_policy", "parser", "generation", "execution"):
+            self.assertEqual(configs[0][key], configs[1][key])
+            self.assertEqual(configs[1][key], configs[2][key])
+
     def test_presence_penalty_excludes_prompt_and_counts_presence_once(self):
         penalty = GeneratedOnlyPresencePenalty(2, 1.5)
         scores = torch.tensor([[1.0, 2.0, 3.0, 4.0]])

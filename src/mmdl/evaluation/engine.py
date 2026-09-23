@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 from mmdl.evaluation.datasets.mmmu import load_validation, separate_sample
-from mmdl.evaluation.parsers import score_response
+from mmdl.evaluation.parsers import score_with_parser
 from mmdl.evaluation.prompt import build_messages
 from mmdl.evaluation.writer import RunWriter, finalize, render
 from mmdl.runtime.artifacts import atomic_bytes, atomic_text, digest, file_records, git_commit, read_json, sha256_file, write_json
@@ -159,6 +159,11 @@ def run(args, cfg, hw, root):
                                  [root / "src/mmdl/evaluation/prompt.py",
                                   root / "src/mmdl/evaluation/parsers.py",
                                   root / "third_party/mmmu/eval_utils.py"])
+    if cfg["parser"] == "team-final-answer-v4":
+        protocol_files += file_records(root, [
+            root / "src/mmdl/evaluation/final_answer_parser.py",
+            root / "src/mmdl/evaluation/backends/input_preparation.py",
+        ])
     data_manifest = read_json(args.data_root / "manifest.json")
     processor_files = [item for item in base_manifest["files"] if not item["path"].endswith(".safetensors")]
     protocol_hash = digest(dict(config=cfg, files=protocol_files, processor=processor_files,
@@ -295,8 +300,9 @@ def run(args, cfg, hw, root):
             with closing(completed_records()) as completed:
                 for record, output, timing in completed:
                     sid = record["id"]
-                    score = score_response(output["raw_response"], record["question_type"],
-                                           record["options"], record["answer"])
+                    score = score_with_parser(output["raw_response"], record["question_type"],
+                                              record["options"], record["answer"], cfg["parser"],
+                                              output.get("finish_reason"))
                     raw = output["raw_response"]
                     just_answer = bool(re.fullmatch(
                         r"\s*(?:(?:the\s+)?(?:correct\s+|final\s+)?answer\s*(?:is|:)\s*)?"

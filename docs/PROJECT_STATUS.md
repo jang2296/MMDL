@@ -1,5 +1,19 @@
 # Assignment 1 baseline — 작업 상태
 
+## 2026-09-23 최신 상태: 채점/입력 통제 후 신규3090 평가 승인
+
+- 기존 R1/R2 모두900완료·회수·독립검증·Pod삭제 완료. 원래427/900과459/900은 불변 기록이다.
+- `docs/P0/MMMU_audit`의 원본 V2 code/hash/8tests 확인 후 두900을 실제 CPU 재채점:
+  536/900(+128−19),584/900(+148−23). 문항별 응답hash·추출·판정 모두 감사표와 일치한다.
+- V2는 length/open 기존 판정 유지 한계가 있어 별도 `team-final-answer-v4`를 확정했다.
+  일반 설명을 답 선언으로 취급한 후보 버그를 합성 회귀 검사로 수정하고, open은 최종 구간에만 공식 evaluator를 적용한다.
+  두900 전체 재채점은479/900·556/900이며 원래 결과와 감사V2를 덮어쓰지 않는다.
+  CPU111 tests/Ruff/mypy24source/Bash 검사 통과. 새 입력·모델 GPU 추론은 아직 검증 전이다.
+- CPU900 입력 대조 완료: A는 기존 token수/grid/tensorhash 모두 일치. A→B897개,
+  A→C900개 텐서 차이, C최대5627입력. 출력32768 유지, 전체context40960으로 고정한다.
+- GPU A/B/C 및 신규900은 아직 미실행, 유료 Pod 미생성. 승인 조건/출처/명령은
+  [EVALUATION_V2](EVALUATION_V2.md)에 기록한다. 아래9/22의 실행중 표기는 역사 기록이다.
+
 2026-09-22. 최신 운영 문서: 로컬 smoke/부분 검증 → 팀 GitHub 고정 commit의 clean clone →
 RunPod 단일 `mmmu-val` evaluation 900 추론 → 로컬 회수·검증 → 전용 자원 삭제.
 새 분석용/테스트용 full run은 만들지 않으며, 저장된 evaluation 결과를 점수와 실패 검토에 함께 사용한다.

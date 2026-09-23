@@ -4,6 +4,8 @@
 /data/
 /artifacts/
 /outputs/
+/analysis_exports/
+/docs/P0/
 /checkpoints/
 /.env
 /.venv/

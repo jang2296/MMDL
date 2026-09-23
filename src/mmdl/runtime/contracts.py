@@ -32,6 +32,18 @@ EXECUTION_PROFILES = {
                                   sdpa_kernel="not_applicable", deterministic=False,
                                   scheduling="continuous"),
 }
+CONTROL_IMAGES = {
+    "mmmu-val-control-a-v2": dict(min_pixels=262144, max_pixels=1310720,
+                                  resize_owner="official_processor", preprocessing="hf_processor"),
+    "mmmu-val-control-b-v2": dict(min_pixels=262144, max_pixels=1310720,
+                                  resize_owner="qwen_vl_utils", preprocessing="qwen_vl_utils_0_0_14"),
+    "mmmu-val-control-c-v2": dict(min_pixels=1003520, max_pixels=4014080,
+                                  resize_owner="qwen_vl_utils", preprocessing="qwen_vl_utils_0_0_14"),
+}
+for _protocol in CONTROL_IMAGES:
+    EXECUTION_PROFILES[_protocol] = dict(backend="vllm", batch_size=1, attention="vllm",
+                                       sdpa_kernel="not_applicable", deterministic=False,
+                                       scheduling="continuous", max_model_len=40960)
 HARDWARE_KEYS = set("name placement gpu_index expected_vram_gib gpu_weight_cap_gib "
                     "gpu_reserve_gib cpu_weight_cap_gib cpu_available_fraction "
                     "min_free_gpu_gib allow_disk_offload num_workers".split())
@@ -61,14 +73,18 @@ def validate_configs(cfg, hw):
         raise ValueError("The Qwen Instruct recipe and team seed policy are fixed")
     if cfg["execution"] != EXECUTION_PROFILES.get(cfg.get("protocol_id")) or cfg["prompt_policy"] != "P0":
         raise ValueError("Execution must match a named fixed protocol; P0 is unchanged")
-    if cfg["parser"] != "mmmu-official-no-random-v1":
+    expected_parser = "team-final-answer-v4" if cfg["protocol_id"] in CONTROL_IMAGES else "mmmu-official-no-random-v1"
+    if cfg["parser"] != expected_parser:
         raise ValueError("Unknown parser")
     if cfg["status"] not in {"DRAFT", "FROZEN"}:
         raise ValueError("Invalid protocol status")
     if not isinstance(cfg["generation"]["max_new_tokens"], int) or not 1 <= cfg["generation"]["max_new_tokens"] <= 32768:
         raise ValueError("Invalid generation budget")
     image = cfg["image"]
-    if set(image) != {"min_pixels", "max_pixels", "resize_owner"} or image["resize_owner"] != "official_processor":
+    if cfg["protocol_id"] in CONTROL_IMAGES:
+        if image != CONTROL_IMAGES[cfg["protocol_id"]] or cfg["generation"]["max_new_tokens"] != 32768:
+            raise ValueError("Controlled image protocol and output budget are fixed")
+    elif set(image) != {"min_pixels", "max_pixels", "resize_owner"} or image["resize_owner"] != "official_processor":
         raise ValueError("Only the official processor may resize images")
     if not 1024 <= image["min_pixels"] <= image["max_pixels"]:
         raise ValueError("Invalid pixel budget")

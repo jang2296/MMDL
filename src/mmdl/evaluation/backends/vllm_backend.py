@@ -13,7 +13,7 @@ import psutil
 import torch
 from transformers import AutoConfig, AutoProcessor
 
-from mmdl.evaluation.backends.input_preparation import prepare_inputs
+from mmdl.evaluation.backends.input_preparation import prepare_protocol_inputs
 from mmdl.runtime.artifacts import digest
 from mmdl.runtime.contracts import MODEL_REVISION
 
@@ -60,14 +60,14 @@ def _device_memory_used_bytes() -> int | None:
 
 
 class VLLMBackend:
-    """Batch-two vLLM inference without changing model, processor, or sampling recipe."""
+    """Bounded vLLM inference with a separately frozen evaluation protocol."""
 
     def __init__(self, model_path: str, cfg: dict[str, Any], hw: dict[str, Any], kind: str = "base",
                  base_path: str | None = None):
         if hw["placement"] != "gpu_only":
             raise ValueError("vLLM accelerated protocol requires the GPU-only hardware profile")
-        if cfg["execution"]["backend"] != "vllm" or cfg["execution"]["batch_size"] != 2:
-            raise ValueError("vLLM accelerated protocol requires backend=vllm and batch_size=2")
+        if cfg["execution"]["backend"] != "vllm" or cfg["execution"]["batch_size"] not in (1, 2):
+            raise ValueError("vLLM requires a validated protocol with one or two active requests")
         if kind == "adapter":
             raise ValueError("vLLM accelerated protocol does not load an unmerged adapter")
         if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
@@ -83,14 +83,16 @@ class VLLMBackend:
         processor_path = model_path if kind == "base" else base_path
         assert processor_path is not None
         self.cfg = cfg
-        self.max_model_len = MAX_MODEL_LEN
+        self.max_model_len = cfg["execution"].get("max_model_len", MAX_MODEL_LEN)
         self.batch_size = cfg["execution"]["batch_size"]
-        self.mm_processor_kwargs = {
+        self.mm_processor_kwargs: dict[str, Any] = {
             "size": {
                 "shortest_edge": cfg["image"]["min_pixels"],
                 "longest_edge": cfg["image"]["max_pixels"],
             }
         }
+        if cfg["image"].get("preprocessing") == "qwen_vl_utils_0_0_14":
+            self.mm_processor_kwargs["do_resize"] = False
         self.processor = AutoProcessor.from_pretrained(
             processor_path, revision=MODEL_REVISION, local_files_only=True, trust_remote_code=False
         )
@@ -190,10 +192,11 @@ class VLLMBackend:
         return self._sampling_params_cls(**values)
 
     def _prepare_request(self, request: dict[str, Any], *, final_only: bool) -> tuple[dict[str, Any], dict[str, Any], Any]:
-        item = prepare_inputs(self.processor, self.model_config, request["messages"], request["images"])
+        item, engine_images = prepare_protocol_inputs(
+            self.processor, self.model_config, request["messages"], request["images"], self.cfg.get("image", {}))
         if item["input_tokens"] + self.cfg["generation"]["max_new_tokens"] > self.max_model_len:
             raise ValueError("Input plus max_new_tokens exceeds vLLM max_model_len; refusing truncation")
-        prompt = {"prompt": item["chat_prompt"], "multi_modal_data": {"image": request["images"]}}
+        prompt = {"prompt": item["chat_prompt"], "multi_modal_data": {"image": engine_images}}
         return item, prompt, self._sampling_params(request["seed"], final_only=final_only)
 
     def _row(self, request: dict[str, Any], item: dict[str, Any], params: Any, output: Any,
@@ -235,6 +238,8 @@ class VLLMBackend:
             if observed_device_memory_used is not None else _device_memory_used_bytes(),
             "memory_measurement": memory_measurement,
             "actual_engine_pixel_tensors_verified": False,
+            "processed_image_sizes": item.get("processed_image_sizes"),
+            "image_preprocessing": self.cfg.get("image", {}).get("preprocessing", "hf_processor"),
         }
         if request_latency_seconds is not None:
             row["request_latency_seconds"] = request_latency_seconds

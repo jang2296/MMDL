@@ -2,9 +2,9 @@
 
 - **팀명**: 미제공
 - **팀원**: 미제공
-- **작성일**: 2026-09-22
+- **작성일**: 2026-09-23
 <!-- REPORT_STATUS:BEGIN -->
-- **제출 상태**: `COMPLETE900` 검증 전. 아래의 미실행 표는 점수가 아니며, 완료·검증된 canonical evaluation run만 `scripts/report_baseline.py`가 갱신한다.
+- **제출 상태**: legacy continuous 32k canonical run `COMPLETE900` 및 로컬 독립 검증 완료. 원본 parser 기준 점수는 51.00%이며, V2 CPU audit 점수 64.89%는 별도 rescoring 결과로 구분한다.
 <!-- REPORT_STATUS:END -->
 
 ## 1. 환경 / 재현성
@@ -13,13 +13,13 @@
 |---|---|
 | 모델 | 공식 `Qwen/Qwen3-VL-4B-Instruct`, revision `ebb281ec70b05090aa6165b016eac8ec08e71b17`, 비양자화 BF16 |
 | 데이터 | `MMMU/MMMU` revision `98e6ac0cb9b7b2cd2c991b85a50762edc4aedc68`, validation, 30개 config × 30개 = 900개 |
-| canonical 평가 protocol | `mmmu-val-fast-vllm-32k-continuous-v1`: vLLM `0.11.0`, GPU-only, 최대 active request 2, `max_new_tokens=32768`. 한 request가 끝날 때 즉시 완료 row를 저장하고 다음 request를 refill하는 continuous scheduling을 사용한다. 설치 lock은 [requirements-vllm.lock](https://github.com/jang2296/MMDL/blob/feat/mmmu-baseline/env/requirements-vllm.lock)이다. GPU 900개 실행·메모리·시간은 아직 미검증이다. |
+| canonical 평가 protocol | `mmmu-val-fast-vllm-32k-continuous-v1`: vLLM `0.11.0`, RTX 3090 24GB GPU-only, 최대 active request 2, `max_new_tokens=32768`. 한 request가 끝날 때 즉시 완료 row를 저장하고 다음 request를 refill하는 continuous scheduling을 사용했다. 900/900 완료·시스템 오류 0, 평가 57,885.846초, 생성 token 3,719,200이다. |
 | 로컬 확인 | 기존 RTX 5060 8GB CPU-offload Transformers Accounting 30개와 fast local 1개는 2,048-token 역사적 확인이다. 후자는 312 tokens/EOS, generation 174.7396 s, whole 199.5493 s, allocator allocated/reserved 5,043,425,792/5,093,982,208 bytes, RSS 11,221,233,664 bytes였다. 이는 제출용 32k vLLM/900개 실행·속도 추정·점수가 아니다. |
-| 연속 처리 GPU 검증 | 새 RTX 3090 24GB에서 commit `702ed44c4c45f454746ec4b371ad1b7403b67856`의 3문제 SMOKE가 시스템 오류 없이 완료됐다. 출력은 303/5/415 tokens, 모두 EOS 종료였다. 평가 구간 17.1465 s, 500 ms 간격 전체 GPU 메모리 관측 최대 20.6025 GiB다. 정답은 1/3으로, 이 작은 실행은 기능 검증이지 최종 성능 지표가 아니다. canonical evaluation 900개는 아직 완료되지 않았다. |
+| 연속 처리 GPU 검증 | commit `702ed44c4c45f454746ec4b371ad1b7403b67856`에서 3문제 SMOKE와 900문제 full run을 완료했다. full run 장치 전체 메모리 관측 최대는 22,885,171,200 bytes이며, worker allocator peak는 미측정이다. |
 | RunPod 재현 | GitHub 고정 commit을 새 checkout에 받는 [reproduce.sh](https://github.com/jang2296/MMDL/blob/feat/mmmu-baseline/scripts/reproduce.sh)와 [eval.sh](https://github.com/jang2296/MMDL/blob/feat/mmmu-baseline/scripts/eval.sh)가 모델·데이터 경로를 인자/환경변수로 받는다. 환경 doctor, lock receipt, BF16 probe와 결과 hash를 남긴다. |
 
 <!-- REPORT_RUNTIME:BEGIN -->
-제출용 `COMPLETE900` run의 GPU·시간·장치 메모리 관측치는 아직 미측정이다.
+legacy canonical run의 평가 wall time은 57,885.846초(모델 로드 제외), 장치 전체 메모리 관측 최대는 22,885,171,200 bytes다. 부모 프로세스 RAM peak는 2,555,043,840 bytes로 worker를 포함하지 않는다.
 <!-- REPORT_RUNTIME:END -->
 
 제출용 실행 예시는 다음과 같다. `<...>`은 실행자가 바꾸는 경로이며 source 파일을 수정하지 않는다.
@@ -35,7 +35,7 @@ bash scripts/eval.sh \
   --run-id "${MMDL_JOB_ID}-evaluation" --mode full
 ```
 
-백엔드와 batch는 수업 지침 §1.3·§5가 문서화를 조건으로 자유/권장한 엔지니어링 선택이다. 모델·revision·BF16·데이터·P0·sampling·이미지 budget·채점은 바꾸지 않는다. 연속 protocol은 `async_scheduling=false`, prefix cache 비활성, eager 실행을 유지하면서 `LLMEngine.add_request()`와 `step()`으로 최대 2개 request를 active 상태로 둔다. 완료한 request는 최종 출력만 즉시 저장하고 같은 slot에 다음 독립 request를 넣는다. 이는 두 문제의 완료를 함께 기다리는 고정 batch가 아니다. vLLM protocol의 `deterministic=false`는 PyTorch deterministic-algorithm 강제를 주장하지 않는다는 뜻이며, request seed는 여전히 master 3407에서 ID별로 고정한다. vLLM worker의 image processor에도 같은 pixel budget을 전달하고, 반환된 engine prompt token IDs가 pinned CPU processor의 IDs와 같을 때만 결과를 수용한다. 이 검사는 engine 내부 pixel tensor가 직접 검증되었다는 뜻은 아니다. 새 continuous protocol의 3문제 GPU SMOKE와 실제 slot refill은 검증했지만, 900문제 전체 결과는 아직 없다.
+백엔드와 batch는 수업 지침 §1.3·§5가 문서화를 조건으로 자유/권장한 엔지니어링 선택이다. 모델·revision·BF16·데이터·P0·sampling·이미지 budget·채점은 바꾸지 않는다. 연속 protocol은 `async_scheduling=false`, prefix cache 비활성, eager 실행을 유지하면서 `LLMEngine.add_request()`와 `step()`으로 최대 2개 request를 active 상태로 둔다. 완료한 request는 최종 출력만 즉시 저장하고 같은 slot에 다음 독립 request를 넣는다. 이는 두 문제의 완료를 함께 기다리는 고정 batch가 아니다. vLLM protocol의 `deterministic=false`는 PyTorch deterministic-algorithm 강제를 주장하지 않는다는 뜻이며, request seed는 여전히 master 3407에서 ID별로 고정한다. vLLM worker의 image processor에도 같은 pixel budget을 전달하고, 반환된 engine prompt token IDs가 pinned CPU processor의 IDs와 같을 때만 결과를 수용한다. 이 검사는 engine 내부 pixel tensor가 직접 검증되었다는 뜻은 아니다. 3문제 GPU SMOKE와 실제 slot refill, 900문제 전체 실행을 완료했다.
 
 연속 실행의 `generation_seconds`는 각 `step()` wall time을 해당 step의 active request 수로 나누어 request에 배분한 분석용 시간이고, 겹쳐 실행되는 request의 실제 지연시간은 `request_latency_seconds`로 별도 기록한다. 따라서 request 시간 합은 전체 elapsed time과 같다고 해석하지 않으며, throughput은 engine invocation wall time으로 계산한다. 기존 `mmmu-val-fast-vllm-32k-v1` 고정 batch protocol은 과거 분석 기록으로 보존하고 새 protocol과 결과를 합치지 않는다.
 
@@ -103,63 +103,71 @@ Options:
 <!-- REPORT_DYNAMIC:BEGIN -->
 ## 5. 결과
 
-현재 canonical evaluation의 `COMPLETE900` 결과는 없다. legacy 분석 partial run은 새 run과
-섞지 않는다: 70/900, 시스템 실패 0, EOS 61, `finish_reason=length` 9, 생성 token
-399,758, generation wall 9,936.189초였다. 해당 partial 결과와 백업은 이후 사용자 요청으로 삭제했으며, 이 수치는 삭제 전 관측이다. 9개 length row가 294,912 token(73.77%)을
-차지했으며, 이 현상 때문에 continuous scheduling protocol을 별도 설계했다. 이 partial
-관측은 새 protocol의 GPU 검증이나 900개 점수가 아니다.
+canonical R2 evaluation은 `COMPLETE900`으로 완료되어 로컬 독립 검증했다. legacy R1도
+동일하게 900/900 검증되었다. R1은 2,048-token Transformers reference, R2는 32,768-token
+vLLM continuous baseline이다. 아래 표의 R2 원본 parser 점수는 459/900=51.00%이며,
+별도 CPU V2 audit 점수 584/900=64.89%는 새 추론이 아닌 rescoring 결과다.
 
 | No. | Subject | Data Num | Acc |
 |---:|---|---:|---:|
-| 1 | Accounting | 30 | 미실행 |
-| 2 | Agriculture | 30 | 미실행 |
-| 3 | Architecture_and_Engineering | 30 | 미실행 |
-| 4 | Art | 30 | 미실행 |
-| 5 | Art_Theory | 30 | 미실행 |
-| 6 | Basic_Medical_Science | 30 | 미실행 |
-| 7 | Biology | 30 | 미실행 |
-| 8 | Chemistry | 30 | 미실행 |
-| 9 | Clinical_Medicine | 30 | 미실행 |
-| 10 | Computer_Science | 30 | 미실행 |
-| 11 | Design | 30 | 미실행 |
-| 12 | Diagnostics_and_Laboratory_Medicine | 30 | 미실행 |
-| 13 | Economics | 30 | 미실행 |
-| 14 | Electronics | 30 | 미실행 |
-| 15 | Energy_and_Power | 30 | 미실행 |
-| 16 | Finance | 30 | 미실행 |
-| 17 | Geography | 30 | 미실행 |
-| 18 | History | 30 | 미실행 |
-| 19 | Literature | 30 | 미실행 |
-| 20 | Manage | 30 | 미실행 |
-| 21 | Marketing | 30 | 미실행 |
-| 22 | Materials | 30 | 미실행 |
-| 23 | Math | 30 | 미실행 |
-| 24 | Mechanical_Engineering | 30 | 미실행 |
-| 25 | Music | 30 | 미실행 |
-| 26 | Pharmacy | 30 | 미실행 |
-| 27 | Physics | 30 | 미실행 |
-| 28 | Psychology | 30 | 미실행 |
-| 29 | Public_Health | 30 | 미실행 |
-| 30 | Sociology | 30 | 미실행 |
-|  | **Overall (macro avg)** | **900** | **미실행** |
+| 1 | Accounting | 30 | 80.00% |
+| 2 | Agriculture | 30 | 33.33% |
+| 3 | Architecture_and_Engineering | 30 | 36.67% |
+| 4 | Art | 30 | 40.00% |
+| 5 | Art_Theory | 30 | 46.67% |
+| 6 | Basic_Medical_Science | 30 | 56.67% |
+| 7 | Biology | 30 | 43.33% |
+| 8 | Chemistry | 30 | 26.67% |
+| 9 | Clinical_Medicine | 30 | 46.67% |
+| 10 | Computer_Science | 30 | 50.00% |
+| 11 | Design | 30 | 56.67% |
+| 12 | Diagnostics_and_Laboratory_Medicine | 30 | 30.00% |
+| 13 | Economics | 30 | 60.00% |
+| 14 | Electronics | 30 | 43.33% |
+| 15 | Energy_and_Power | 30 | 50.00% |
+| 16 | Finance | 30 | 66.67% |
+| 17 | Geography | 30 | 46.67% |
+| 18 | History | 30 | 70.00% |
+| 19 | Literature | 30 | 60.00% |
+| 20 | Manage | 30 | 63.33% |
+| 21 | Marketing | 30 | 83.33% |
+| 22 | Materials | 30 | 36.67% |
+| 23 | Math | 30 | 56.67% |
+| 24 | Mechanical_Engineering | 30 | 33.33% |
+| 25 | Music | 30 | 30.00% |
+| 26 | Pharmacy | 30 | 53.33% |
+| 27 | Physics | 30 | 53.33% |
+| 28 | Psychology | 30 | 56.67% |
+| 29 | Public_Health | 30 | 80.00% |
+| 30 | Sociology | 30 | 40.00% |
+|  | **Overall (macro avg)** | **900** | **51.00% (459/900)** |
 
-계산식은 `mean(30개 과목 accuracy) = correct/900`이다. 현재 `COMPLETE900` 검증 run이 없으므로 수치를 적지 않는다.
+계산식은 `mean(30개 과목 accuracy) = correct/900`이다. 모든 과목이 30개로 같아 R2는 `459/900=51.00%`다. V2 audit은 동일 raw response의 CPU rescoring이며 표의 원본 parser 점수를 대체하지 않는다.
 
 ## 6. 공식 수치와의 비교
 
 | | Overall (MMMU validation) |
 |---|---:|
 | 수업이 제시한 공식 비교값 | 67.4 |
-| 우리 재현 결과 | 미실행 |
-| 차이 (Δ, percentage points) | 미실행 |
+| 우리 재현 결과 (R2 원본 parser) | 51.00% |
+| 차이 (Δ, percentage points) | −16.40pp |
 
 ## 7. 격차 분석
 
-`COMPLETE900`이 없으므로 67.4와의 격차 원인을 관측했다고 말할 수 없다. 최종 생성기는 저장 raw response의 `NO_PARSE`/`EMPTY`, `finish_reason=length`, resolved backend·length 설정만으로 1,000자 이내 진단한다. 기존 2,048-token Accounting 15/30 length 종료는 32k protocol 채택의 제한 관측일 뿐 전체 점수 차이의 원인이라고 단정하지 않는다.
+R2 원본 parser 점수는 51.00%로 수업 비교값 67.4보다 16.40pp 낮다. CPU V2 audit은 저장 raw response를 독립 재생해 64.89%를 얻었고, 900개 입력·answer·raw hash 및 8개 audit test를 확인했다. 이는 새 모델 점수가 아니라 parser/scoring 차이의 측정이다. V2에서 주관식 53개와 `length` 종료 75개는 바꾸지 않았으며, 파싱 개선으로 모든 차이가 설명된다고 단정하지 않는다. 공식 Qwen 경로와의 image budget·전처리·채점/seed 차이, 모델의 시각·수리 추론 오류가 남은 후보이며, 새 team-final-answer-v4와 ABC 입력 조건은 CPU 검증 후 고정했으며, GPU 통제 실험과 신규900은 아직 미실행이다.
 <!-- REPORT_DYNAMIC:END -->
 
 ## 8. 기타 특이사항 / 한계
 
+2026-09-23 채점/입력 통제: `team-final-answer-v4`로 저장 R1/R2를 전수 재채점한 값은
+479/900(53.22%)·556/900(61.78%)이다. V2 감사의 기존 length/open 판정 유지와 다른 정책이며
+새 추론 점수는 아니다. 공식 open evaluator를 최종답 구간에만 적용하는 이유와 이미지 A/B/C,
+고정값·코드 hash·회귀검사·차이는 [EVALUATION_V2](https://github.com/jang2296/MMDL/blob/feat/mmmu-baseline/docs/EVALUATION_V2.md)에 기록했다.
+새3090 GPU 통제 실험/신규900이 완료되기 전에는 위 원래 baseline 표를 대체하지 않는다.
+
 - 공식 비교값 67.4는 수업 지침이 제시한 비교 기준이며, 우리 측정값이 아니다.
-- 결과가 완전해지면 canonical evaluation 하나의 저장 결과를 score와 실패 검토에 함께 사용한다. 이미 실행된 continuous32k legacy full run도 900개 coverage·무결성·재채점 검증을 통과하면 같은 목적의 근거로 채택할 수 있다. legacy run을 평균·교체·고득점 선택에 사용하지 않는다.
+- R1 reference는 427/900=47.44%, R2 continuous baseline은 459/900=51.00%다. 두 실행은 backend·출력 상한·난수 소비가 달라 순수 길이 효과로 해석하지 않는다.
+- R2 V2 audit 584/900=64.89%는 동일 저장 응답의 CPU rescoring 결과다. 새 추론/공식 judge 결과가 아니며, 새 scoring version을 최종 고정하기 전까지 R2 원본 51.00%를 canonical baseline으로 유지한다.
+- R2는 847개 객관식과 53개 주관식으로 구성되고, `length` 75개, `NO_PARSE` 69개를 기록했다. 새 parser·ABC 통제 실험은 별도 검증 후 갱신한다.
+- 다음 승인 작업은 CPU scoring 고정 → CPU 입력 audit → ABC 통제 protocol → RTX 3090 full900 순서로 진행 중이다. 새 `team-final-answer-v4` parser와 ABC 결과는 아직 보고서 점수에 반영하지 않는다.
 - final update는 `summary.json`, 900개 sample records, 30개 subject count와 재채점 산술을 독립 검증해야만 허용한다. 대형 raw response·이미지는 외부 artifact에 두고 이 문서는 작은 제출 보고서만 보존한다.

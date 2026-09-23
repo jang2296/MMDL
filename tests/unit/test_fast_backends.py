@@ -1,11 +1,11 @@
 import unittest
 from itertools import count
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import torch
 
-from mmdl.evaluation.backends.input_preparation import prepare_inputs
+from mmdl.evaluation.backends.input_preparation import prepare_inputs, prepare_protocol_inputs
 from mmdl.evaluation.backends.vllm_backend import MAX_MODEL_LEN, VLLMBackend
 
 
@@ -82,6 +82,24 @@ def _request(sample_id, seed):
 
 
 class FastBackendTests(unittest.TestCase):
+    def test_official_image_path_resizes_once_and_preserves_order(self):
+        originals = [object(), object()]
+        processed = [SimpleNamespace(size=(320, 640)), SimpleNamespace(size=(640, 320))]
+        utility = SimpleNamespace(process_vision_info=Mock(return_value=(processed, None)))
+        processor = SimpleNamespace(image_processor=SimpleNamespace(patch_size=16))
+        cfg = {"preprocessing": "qwen_vl_utils_0_0_14", "min_pixels": 1003520,
+               "max_pixels": 4014080}
+        with patch.dict("sys.modules", {"qwen_vl_utils": utility}), \
+                patch("importlib.metadata.version", return_value="0.0.14"), \
+                patch("mmdl.evaluation.backends.input_preparation.prepare_inputs", return_value={}) as prepare:
+            result, engine_images = prepare_protocol_inputs(processor, object(), [], originals, cfg)
+        self.assertIs(engine_images, processed)
+        self.assertEqual(prepare.call_args.kwargs, {"do_resize": False})
+        content = utility.process_vision_info.call_args.args[0][0]["content"]
+        self.assertEqual([item["image"] for item in content], originals)
+        self.assertTrue(all(item["max_pixels"] == 4014080 for item in content))
+        self.assertEqual(result["processed_image_sizes"], [[320, 640], [640, 320]])
+
     def test_prepare_inputs_keeps_processor_grid_and_token_identity(self):
         prepared = prepare_inputs(_Processor(), SimpleNamespace(image_token_id=99), _request("one", 1)["messages"], [object()])
         self.assertEqual(prepared["prompt_token_ids"], [7, 99, 99, 99, 99])

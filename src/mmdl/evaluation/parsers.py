@@ -18,6 +18,19 @@ _OPEN_TYPES = {"open", "open-ended", "open ended", "free-response", "free respon
 _OFFICIAL: ModuleType | None = None
 
 
+def score_with_parser(raw: Any, question_type: str, options: Sequence[str] | Mapping[str, str],
+                      answer: Any, parser_id: str = "mmmu-official-no-random-v1",
+                      finish_reason: str | None = None) -> dict[str, Any]:
+    """Select an explicit scoring version; keep historical results reproducible."""
+    if parser_id == "mmmu-official-no-random-v1":
+        return score_response(raw, question_type, options, answer)
+    if parser_id == "team-final-answer-v4":
+        from mmdl.evaluation.final_answer_parser import score_response as final_score
+
+        return final_score(raw, question_type, options, answer, finish_reason)
+    raise ValueError(f"Unknown scoring version: {parser_id}")
+
+
 def _question_type(value: Any) -> str:
     normalized = str(value).strip().lower().replace("_", "-")
     if normalized in _MCQ_TYPES:

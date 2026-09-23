@@ -86,6 +86,15 @@ class ReproduceTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     arguments(["--job-id", "fixture", "--commit", "a" * 40] + extra)
 
+    def test_prepare_only_dry_run_excludes_inference(self):
+        output = io.StringIO()
+        with patch("mmdl.runtime.reproduce.execute") as execute, contextlib.redirect_stdout(output):
+            main(["--job-id", "fixture", "--commit", "a" * 40, "--prepare-only"])
+        execute.assert_not_called()
+        result = json.loads(output.getvalue())
+        self.assertTrue(result["prepare_only"])
+        self.assertFalse(any("evaluation" in step or "smoke" in step for step in result["steps"]))
+
     def test_only_one_evaluation_suite_is_accepted(self):
         self.assertEqual(arguments(["--job-id", "fixture", "--commit", "a" * 40]).suite, "mmmu-val")
         for suite in ("mmmu-val-two-runs", "mmmu-val-analysis", "mmmu-val-assignment"):
