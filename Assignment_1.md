@@ -154,7 +154,7 @@ vLLM continuous baseline이다. 아래 표의 R2 원본 parser 점수는 459/900
 
 ## 7. 격차 분석
 
-R2 원본 parser 점수는 51.00%로 수업 비교값 67.4보다 16.40pp 낮다. CPU V2 audit은 저장 raw response를 독립 재생해 64.89%를 얻었고, 900개 입력·answer·raw hash 및 8개 audit test를 확인했다. 이는 새 모델 점수가 아니라 parser/scoring 차이의 측정이다. V2에서 주관식 53개와 `length` 종료 75개는 바꾸지 않았으며, 파싱 개선으로 모든 차이가 설명된다고 단정하지 않는다. 공식 Qwen 경로와의 image budget·전처리·채점/seed 차이, 모델의 시각·수리 추론 오류가 남은 후보이며, 새 team-final-answer-v4와 ABC 입력 조건은 CPU 검증 후 고정했다. GPU 통제 실험은 진행 중이고 신규900은 해당 검증 통과 후 실행하도록 대기 중이다.
+R2 원본 parser 점수는 51.00%로 수업 비교값 67.4보다 16.40pp 낮다. CPU V2 audit은 저장 raw response를 독립 재생해 64.89%를 얻었고, 900개 입력·answer·raw hash 및 8개 audit test를 확인했다. 이는 새 모델 점수가 아니라 parser/scoring 차이의 측정이다. V2에서 주관식 53개와 `length` 종료 75개는 바꾸지 않았으며, 파싱 개선으로 모든 차이가 설명된다고 단정하지 않는다. 공식 Qwen 경로와의 image budget·전처리·채점/seed 차이, 모델의 시각·수리 추론 오류가 남은 후보이며, 새 team-final-answer-v4와 ABC 입력 조건은 CPU 검증 후 고정했다. A/B/C 통제18개는 오류 없이 완료했으나 각2/6으로 개선을 입증하지는 못했다. 동시1 부분900은 사용자 요청으로 폐기했으며 같은 C 조건의 동시2 신규900은 아직 미완료다.
 <!-- REPORT_DYNAMIC:END -->
 
 ## 8. 기타 특이사항 / 한계
@@ -163,7 +163,11 @@ R2 원본 parser 점수는 51.00%로 수업 비교값 67.4보다 16.40pp 낮다.
 479/900(53.22%)·556/900(61.78%)이다. V2 감사의 기존 length/open 판정 유지와 다른 정책이며
 새 추론 점수는 아니다. 공식 open evaluator를 최종답 구간에만 적용하는 이유와 이미지 A/B/C,
 고정값·코드 hash·회귀검사·차이는 [EVALUATION_V2](https://github.com/jang2296/MMDL/blob/feat/mmmu-baseline/docs/EVALUATION_V2.md)에 기록했다.
-새3090 GPU 통제 실험/신규900이 완료되기 전에는 위 원래 baseline 표를 대체하지 않는다.
+통제18개는 오류0·각2/6·length1로 완료했다. 신규900이 완료되기 전에는 위 원래 baseline 표를 대체하지 않는다.
+동시1 C 부분900은 사용자 요청으로 중단·미회수 폐기했고 해당 Pod 삭제204/조회404를 확인했다.
+새 `mmmu-val-official-vllm-b2-v2`는 C의 동시 요청만2로 바꾼 별도 protocol이다.
+수업 §1.3·§5의 backend/batch 자유에 따른 선택이며, 같은 이미지·출력32768·sampling·채점을 유지한다.
+기존 continuous refill을 재사용하고 새900을 처음부터 실행한다. CUDA Graph/async는 켜지 않았고 가속률은 미측정이다.
 
 - 공식 비교값 67.4는 수업 지침이 제시한 비교 기준이며, 우리 측정값이 아니다.
 - R1 reference는 427/900=47.44%, R2 continuous baseline은 459/900=51.00%다. 두 실행은 backend·출력 상한·난수 소비가 달라 순수 길이 효과로 해석하지 않는다.

@@ -39,11 +39,14 @@ CONTROL_IMAGES = {
                                   resize_owner="qwen_vl_utils", preprocessing="qwen_vl_utils_0_0_14"),
     "mmmu-val-control-c-v2": dict(min_pixels=1003520, max_pixels=4014080,
                                   resize_owner="qwen_vl_utils", preprocessing="qwen_vl_utils_0_0_14"),
+    "mmmu-val-official-vllm-b2-v2": dict(min_pixels=1003520, max_pixels=4014080,
+                                         resize_owner="qwen_vl_utils", preprocessing="qwen_vl_utils_0_0_14"),
 }
 for _protocol in CONTROL_IMAGES:
     EXECUTION_PROFILES[_protocol] = dict(backend="vllm", batch_size=1, attention="vllm",
                                        sdpa_kernel="not_applicable", deterministic=False,
                                        scheduling="continuous", max_model_len=40960)
+EXECUTION_PROFILES["mmmu-val-official-vllm-b2-v2"]["batch_size"] = 2
 HARDWARE_KEYS = set("name placement gpu_index expected_vram_gib gpu_weight_cap_gib "
                     "gpu_reserve_gib cpu_weight_cap_gib cpu_available_fraction "
                     "min_free_gpu_gib allow_disk_offload num_workers".split())

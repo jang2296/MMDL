@@ -69,6 +69,28 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(configs[0][key], configs[1][key])
             self.assertEqual(configs[1][key], configs[2][key])
 
+        b2, hw = load_configs(ROOT / "configs/eval/mmmu_val_official_vllm_b2_v2.yaml",
+                              ROOT / "configs/hardware/rtx3090_24gb.yaml")
+        self.assertEqual(b2["protocol_id"], "mmmu-val-official-vllm-b2-v2")
+        self.assertEqual(b2["execution"]["batch_size"], 2)
+        comparable = copy.deepcopy(b2)
+        comparable["protocol_id"] = configs[2]["protocol_id"]
+        comparable["execution"]["batch_size"] = configs[2]["execution"]["batch_size"]
+        self.assertEqual(comparable, configs[2])
+
+        old_c, old_hw = load_configs(ROOT / "configs/eval/mmmu_val_control_c_v2.yaml",
+                                     ROOT / "configs/hardware/rtx3090_24gb.yaml")
+        changed = copy.deepcopy(old_c)
+        changed["execution"]["batch_size"] = 2
+        with self.assertRaises(ValueError):
+            validate_configs(changed, old_hw)
+        for section, key, value in [("generation", "max_new_tokens", 2048),
+                                    ("image", "max_pixels", 1310720)]:
+            changed = copy.deepcopy(b2)
+            changed[section][key] = value
+            with self.assertRaises(ValueError):
+                validate_configs(changed, hw)
+
     def test_presence_penalty_excludes_prompt_and_counts_presence_once(self):
         penalty = GeneratedOnlyPresencePenalty(2, 1.5)
         scores = torch.tensor([[1.0, 2.0, 3.0, 4.0]])

@@ -8,21 +8,25 @@
 - V2는 length/open 기존 판정 유지 한계가 있어 별도 `team-final-answer-v4`를 확정했다.
   일반 설명을 답 선언으로 취급한 후보 버그를 합성 회귀 검사로 수정하고, open은 최종 구간에만 공식 evaluator를 적용한다.
   두900 전체 재채점은479/900·556/900이며 원래 결과와 감사V2를 덮어쓰지 않는다.
-  CPU111 tests/Ruff/mypy24source/Bash 검사 통과. 새 입력·모델 GPU 통제 실험은 진행 중이다.
+  CPU111 tests/Ruff/mypy24source/Bash 검사 통과. 새 입력·모델 GPU 통제 실험18개를 완료했다.
 - CPU900 입력 대조 완료: A는 기존 token수/grid/tensorhash 모두 일치. A→B897개,
   A→C900개 텐서 차이, C최대5627입력. 출력32768 유지, 전체context40960으로 고정한다.
 - 게시 commit `a7fb5fec8d6b2a96c29e4577b351926e1aaba4b9`를 Pod `pdszzbcroakws1`에서
   clean checkout했다. RTX3090 24576MiB, driver580.65.06, Python3.12.3이며,
   GPU API 단가$0.22/h에 storage는 별도다. 기존 사용자 비용 상한 철회 범위를 적용한다.
   exact lock 설치·pip check·CUDA/BF16 doctor·지정 model/MMMU 다운로드를 통과했다.
-  04:55 UTC A의6문항 중4문항을 완료했고 아직 시스템 오류는 없었다. B/C와 신규900은 미완료다.
-  로그는 Pod `/workspace/control-launcher.log`, 결과는 `/workspace/artifacts/runs/`에 기록한다.
-  A/B/C launcher 자체는6개씩 완료 후 멈춘다. 별도 운영 continuation을 등록했다:
-  18개 SMOKE의 고정 commit/설정·coverage·오류0·레코드/코드/이미지 hash·seed·재채점을
-  검사하고 control archive를 만든 뒤 같은 commit의 C full900(`mmdl-input-v2-full`)을 시작한다.
-  현재 후속 프로세스는 대기 중이며 full900 시작/완료를 뜻하지 않는다. 실패하면900을 시작하지 않고 보존한다.
-  후속 로그는 `/workspace/full-launcher.log`다. 자동 Pod 삭제는 없으며 회수·검증 후 삭제한다. 승인 조건/출처/명령은
-  [EVALUATION_V2](EVALUATION_V2.md)에 기록한다. 아래9/22의 실행중 표기는 역사 기록이다.
+  05:55 UTC A/B/C 각6/6·시스템 오류0을 완료하고 guard를 통과했다. 각2정답·length1이며
+  평가 시간은 A1259.523s/B1346.895s/C1188.180s다. 작은 진단 표본으로 정확도 개선을 주장하지 않는다.
+  C smoke 후05:57 UTC 동시1 full900을 시작했으나 사용자 요청으로 중단했다.
+- **06:14:18 UTC Pod 삭제 완료:** `pdszzbcroakws1` 삭제204·후속 조회404.
+  중단된 `mmdl-input-v2-full-evaluation` 부분 결과는 사용자 요청대로 회수하지 않고 Pod 디스크와 함께 폐기했다.
+  기존 완료 R1/R2는 그대로 보존했다. 완료 A/B/C만 `analysis_exports/mmmu_20260923/new_baseline/`
+  `mmdl-input-v2-controls.tar.gz`(3,400,152 bytes)로 회수했고 로컬18 record hash를 확인했다.
+- 새 동시2 protocol `configs/eval/mmmu_val_official_vllm_b2_v2.yaml`은 C와 ID·batch만 다르다.
+  기존 independent continuous refill을 재사용한다. 이미지/출력/문맥/seed/scorer 조건 완화는 없다.
+  CPU111 tests/Ruff/mypy24source/Bash 통과. GitHub 게시 후 새3090의3문제 smoke→새900을 실행한다.
+  CUDA Graph/async 추가 가속은 미검증 후보이며 이번 실행에 켜지 않는다. GPU 성공/속도는 아직 미측정이다.
+  승인 조건/출처/명령은 [EVALUATION_V2](EVALUATION_V2.md)에 기록한다. 아래9/22의 실행중 표기는 역사 기록이다.
 
 2026-09-22. 최신 운영 문서: 로컬 smoke/부분 검증 → 팀 GitHub 고정 commit의 clean clone →
 RunPod 단일 `mmmu-val` evaluation 900 추론 → 로컬 회수·검증 → 전용 자원 삭제.
