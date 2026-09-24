@@ -51,6 +51,9 @@ class FastProtocolTests(unittest.TestCase):
     def test_continuous_completion_saved_before_next_request_is_prepared(self):
         self._run_mocked_backend(continuous=True)
 
+    def test_v8_online_scoring_matches_the_cpu_scorer(self):
+        self._run_mocked_backend(continuous=True, v8=True)
+
     def test_continuous_failure_preserves_prior_completion_and_records_active_failures(self):
         self._run_mocked_backend(continuous=True, fail_after_first=True)
 
@@ -65,7 +68,7 @@ class FastProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_configs(new, hw)
 
-    def _run_mocked_backend(self, continuous=False, fail_after_first=False):
+    def _run_mocked_backend(self, continuous=False, fail_after_first=False, v8=False):
         class Dataset(list):
             def __getitem__(self, key):
                 if key == "id":
@@ -128,6 +131,8 @@ class FastProtocolTests(unittest.TestCase):
             } for index in ((1, 2, 3) if continuous else (1, 2))])
             protocol = ROOT / ("configs/eval/mmmu_val_continuous_vllm_v1.yaml" if continuous
                                else "configs/eval/mmmu_val_fast_vllm_v1.yaml")
+            if v8:
+                protocol = ROOT / "configs/eval/mmmu_val_v8.yaml"
             cfg, hw = load_configs(protocol,
                                    ROOT / "configs/hardware/rtx3090_24gb.yaml")
             args = SimpleNamespace(
@@ -161,6 +166,15 @@ class FastProtocolTests(unittest.TestCase):
             self.assertEqual(summary["status"], "INCOMPLETE" if fail_after_first else "SMOKE")
             self.assertEqual(summary["completed_count"], 1 if fail_after_first else len(rows))
             samples = artifacts / "runs/smoke-fast/samples"
+            if v8:
+                from mmdl.evaluation.parsers import score_with_parser
+                for path in samples.glob("*.json"):
+                    record = read_json(path)
+                    expected = score_with_parser(record["raw_response"], record["question_type"],
+                                                 record["options"], record["answer"], cfg["parser"],
+                                                 record["finish_reason"], question=record["question"])
+                    self.assertEqual({key: record[key] for key in expected}, expected)
+                    self.assertTrue(record["correct"])
             self.assertEqual({read_json(path)["id"] for path in samples.glob("*.json")},
                              {"validation_Accounting_2"} if fail_after_first else set(rows["id"]))
             if continuous:

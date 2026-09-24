@@ -5,6 +5,11 @@
 /artifacts/
 /outputs/
 /analysis_exports/
+/MMDL/
+/AGENTS.md
+/docs/
+/claudedocs/
+/results/P1/
 /docs/P0/
 /checkpoints/
 /.env

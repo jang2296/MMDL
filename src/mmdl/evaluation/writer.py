@@ -297,7 +297,7 @@ def finalize(run_dir: Path, expected_ids: list[str], mode: str) -> dict[str, Any
     return summary
 
 
-def render(run_dir: Path) -> Path:
+def render(run_dir: Path, *, include_images: bool = True) -> Path:
     """Produce a local, escaped inspection page without embedding benchmark images."""
     run_dir = Path(run_dir)
     manifest = read_json(run_dir / "run_manifest.json")
@@ -314,6 +314,8 @@ def render(run_dir: Path) -> Path:
         "img{max-width:100%;height:auto}</style>",
         "<body><h1>MMDL run review</h1>",
     ]
+    if not include_images:
+        parts.append("<p>Text-only rescoring review; original images remain with the source run.</p>")
     for record in records + failures:
         sample_id = escaped(record["id"])
         parts.append(f"<section><h2>{sample_id}</h2>")
@@ -338,7 +340,7 @@ def render(run_dir: Path) -> Path:
                 parts.append('<h3>Choices</h3><ol type="A">')
                 parts.extend(f"<li>{escaped(option)}</li>" for option in options)
                 parts.append("</ol>")
-        for image in record.get("images", []):
+        for image in record.get("images", []) if include_images else []:
             resolve_image(run_dir, image)
             href = html.escape(image, quote=True)
             parts.append(f'<p><a href="{href}"><img src="{href}" loading="lazy" alt="{sample_id} image"></a></p>')

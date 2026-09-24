@@ -1,0 +1,74 @@
+{
+  "parser": "team-final-answer-v8",
+  "comparison_policy": "single-final-mmmu-round2-v1",
+  "scoring_sha256": "b80a28a4b66906d5c4f1ece046bd7c4be2b447445da4b072144e52ce7ee047fa",
+  "files": [
+    {
+      "path": "src/mmdl/evaluation/final_answer_parser.py",
+      "bytes": 17739,
+      "sha256": "fc2c6a757ce7361efae13be9f22f8bedcc9c35d66373124b8815b8528b2e31a0"
+    },
+    {
+      "path": "src/mmdl/evaluation/final_answer_parser_v8.py",
+      "bytes": 26466,
+      "sha256": "2beb1230283cb882f47d6e8af72b01180847fd7aa4b7ac640a5173e391f3f891"
+    },
+    {
+      "path": "src/mmdl/evaluation/parsers.py",
+      "bytes": 6569,
+      "sha256": "1bfdabe251d5cbf14b6554f2c979492ec18207de5fb826a0045dd2d93ca3e221"
+    },
+    {
+      "path": "third_party/mmmu/eval_utils.py",
+      "bytes": 8992,
+      "sha256": "cc1a89b4a27f697702d340bc6a7578b5237135754ddaa9ef105239a3d9847367"
+    }
+  ],
+  "date": "2026-09-24",
+  "status": "CPU_REPLAY_VERIFIED",
+  "corpus": {
+    "runs": 3,
+    "samples_per_run": 900,
+    "total_responses": 2700,
+    "subjects_per_run": 30,
+    "samples_per_subject": 30
+  },
+  "validation": {
+    "pipeline_unit_tests": 167,
+    "ruff": "PASS",
+    "mypy_source_files": 25,
+    "mypy": "PASS",
+    "bash_syntax": "PASS",
+    "source_hashes": "PASS",
+    "all_non_scoring_fields_unchanged": true,
+    "gold_independence_checks": 2700,
+    "historical_regression": {
+      "clear_v7_misses_retained": 39,
+      "clear_v7_misses_total": 46,
+      "policy_misses_retained": 2,
+      "policy_misses_total": 2,
+      "v7_valid_gains_retained": 4,
+      "v7_valid_gains_total": 4
+    },
+    "v6_correctness_changes": {
+      "gained": 4,
+      "lost": 11,
+      "loss_reasons": {
+        "directional_qualifier_not_stripped": 3,
+        "conflicting_declarations_without_explicit_correction": 4,
+        "ambiguous_or_truncated_conflicts": 4
+      }
+    }
+  },
+  "limits": [
+    "Development regression, not independent holdout validation.",
+    "No perfect semantic-correctness guarantee.",
+    "No new GPU inference, RTX4090 test, fine-tuning or detailed model-error analysis.",
+    "Historical raw-response artifacts are preserved separately, not distributed in this repository."
+  ],
+  "historical_inference": {
+    "official_b2_commit": "6d6d4a1a4bed1785e8770902d65e12b54340ba75",
+    "parser_at_generation": "team-final-answer-v4"
+  },
+  "current_inference_protocol": "configs/eval/mmmu_val_v8.yaml"
+}

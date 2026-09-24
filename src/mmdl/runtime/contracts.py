@@ -47,6 +47,8 @@ for _protocol in CONTROL_IMAGES:
                                        sdpa_kernel="not_applicable", deterministic=False,
                                        scheduling="continuous", max_model_len=40960)
 EXECUTION_PROFILES["mmmu-val-official-vllm-b2-v2"]["batch_size"] = 2
+CONTROL_IMAGES["mmmu-val-v8"] = dict(CONTROL_IMAGES["mmmu-val-official-vllm-b2-v2"])
+EXECUTION_PROFILES["mmmu-val-v8"] = dict(EXECUTION_PROFILES["mmmu-val-official-vllm-b2-v2"])
 HARDWARE_KEYS = set("name placement gpu_index expected_vram_gib gpu_weight_cap_gib "
                     "gpu_reserve_gib cpu_weight_cap_gib cpu_available_fraction "
                     "min_free_gpu_gib allow_disk_offload num_workers".split())
@@ -77,6 +79,8 @@ def validate_configs(cfg, hw):
     if cfg["execution"] != EXECUTION_PROFILES.get(cfg.get("protocol_id")) or cfg["prompt_policy"] != "P0":
         raise ValueError("Execution must match a named fixed protocol; P0 is unchanged")
     expected_parser = "team-final-answer-v4" if cfg["protocol_id"] in CONTROL_IMAGES else "mmmu-official-no-random-v1"
+    if cfg["protocol_id"] == "mmmu-val-v8":
+        expected_parser = "team-final-answer-v8"
     if cfg["parser"] != expected_parser:
         raise ValueError("Unknown parser")
     if cfg["status"] not in {"DRAFT", "FROZEN"}:

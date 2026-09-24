@@ -20,15 +20,33 @@ _OFFICIAL: ModuleType | None = None
 
 def score_with_parser(raw: Any, question_type: str, options: Sequence[str] | Mapping[str, str],
                       answer: Any, parser_id: str = "mmmu-official-no-random-v1",
-                      finish_reason: str | None = None) -> dict[str, Any]:
+                      finish_reason: str | None = None, *, question: str = "") -> dict[str, Any]:
     """Select an explicit scoring version; keep historical results reproducible."""
     if parser_id == "mmmu-official-no-random-v1":
         return score_response(raw, question_type, options, answer)
-    if parser_id == "team-final-answer-v4":
+    if parser_id == "team-final-answer-v8":
+        from mmdl.evaluation.final_answer_parser_v8 import score_response as v8_score
+
+        return v8_score(raw, question_type, options, answer, finish_reason, question=question)
+    if parser_id in {"team-final-answer-v4", "team-final-answer-v5", "team-final-answer-v6"}:
         from mmdl.evaluation.final_answer_parser import score_response as final_score
 
-        return final_score(raw, question_type, options, answer, finish_reason)
+        return final_score(raw, question_type, options, answer, finish_reason, parser_id=parser_id)
     raise ValueError(f"Unknown scoring version: {parser_id}")
+
+
+def scoring_source_files(parser_id: str) -> list[Path]:
+    """All executable scoring dependencies, ordered for a stable source fingerprint."""
+    root = Path(__file__).resolve().parents[3]
+    paths = [Path(__file__), root / "third_party/mmmu/eval_utils.py"]
+    if parser_id in {"team-final-answer-v4", "team-final-answer-v5", "team-final-answer-v6",
+                     "team-final-answer-v8"}:
+        paths.append(Path(__file__).with_name("final_answer_parser.py"))
+        if parser_id == "team-final-answer-v8":
+            paths.append(Path(__file__).with_name("final_answer_parser_v8.py"))
+    elif parser_id != "mmmu-official-no-random-v1":
+        raise ValueError(f"Unknown scoring version: {parser_id}")
+    return paths
 
 
 def _question_type(value: Any) -> str:

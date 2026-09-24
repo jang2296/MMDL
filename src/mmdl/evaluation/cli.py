@@ -26,8 +26,8 @@ def validate_execution(args, hw):
 def main():
     root = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--protocol", type=Path, default=root / "configs/eval/mmmu_val_v1.yaml")
-    parser.add_argument("--hardware", type=Path, default=root / "configs/hardware/rtx5060_8gb.yaml")
+    parser.add_argument("--protocol", type=Path, default=root / "configs/eval/mmmu_val_v8.yaml")
+    parser.add_argument("--hardware", type=Path, default=root / "configs/hardware/rtx4090_24gb.yaml")
     parser.add_argument("--model-ref", type=Path, default=root / "manifests/models/baseline.json")
     parser.add_argument("--model-path", default=os.environ.get("MMDL_MODEL_PATH", MODEL_ID))
     parser.add_argument("--base-path", type=Path, help="Pinned official base snapshot for a derived checkpoint")
@@ -84,15 +84,17 @@ def rescore_main():
     """Re-evaluate raw responses without importing Torch or loading a model."""
     import yaml
     from collections import Counter
-    from mmdl.evaluation.parsers import score_with_parser
-    from mmdl.evaluation.writer import RunWriter, finalize
+    from mmdl.evaluation.parsers import score_with_parser, scoring_source_files
+    from mmdl.evaluation.writer import RunWriter, finalize, render
     from mmdl.runtime.artifacts import sha256_file
 
     parser = argparse.ArgumentParser(description="Rescore preserved responses into a separate artifact")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--artifact-root", type=Path, default=default_path("MMDL_ARTIFACT_ROOT", "mmdl-artifacts"))
     parser.add_argument("--verify", action="store_true", help="Fail if current parsing differs")
-    parser.add_argument("--parser", choices=["mmmu-official-no-random-v1", "team-final-answer-v4"],
+    parser.add_argument("--parser", choices=["mmmu-official-no-random-v1", "team-final-answer-v4",
+                                           "team-final-answer-v5", "team-final-answer-v6",
+                                           "team-final-answer-v8"],
                         help="Default: the source run's saved scoring version")
     parser.add_argument("--output-dir", type=Path, help="Separate result directory; source rows remain immutable")
     args = parser.parse_args()
@@ -109,11 +111,7 @@ def rescore_main():
     for row in rows:
         if row.get("_record_sha256") != digest({k: v for k, v in row.items() if k != "_record_sha256"}):
             parser.error(f"Source record integrity mismatch: {row['id']}")
-    parser_path = Path(__file__).parent / "parsers.py"
-    official_path = Path(__file__).resolve().parents[3] / "third_party/mmmu/eval_utils.py"
-    scoring_files = [parser_path, official_path]
-    if parser_id == "team-final-answer-v4":
-        scoring_files.append(Path(__file__).parent / "final_answer_parser.py")
+    scoring_files = scoring_source_files(parser_id)
     scoring_hash = digest([parser_id, *[sha256_file(path) for path in scoring_files]])
     destination = args.output_dir or source / "rescoring" / scoring_hash[:16]
     if args.output_dir and destination.exists():
@@ -133,9 +131,23 @@ def rescore_main():
             "parser": parser_id, "scoring_sha256": scoring_hash,
         })
         (destination / "resolved_eval_config.yaml").write_text(yaml.safe_dump(source_cfg | {"parser": parser_id}))
+        if parser_id == "team-final-answer-v8":
+            import shutil
+            from mmdl.evaluation.final_answer_parser_v8 import COMPARISON_POLICY
+            from mmdl.runtime.artifacts import file_records
+
+            root = Path(__file__).resolve().parents[3]
+            for path in scoring_files:
+                target = destination / "scorer_source" / path.relative_to(root)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+            write_json(destination / "scorer_source.json", {
+                "parser": parser_id, "comparison_policy": COMPARISON_POLICY,
+                "scoring_sha256": scoring_hash, "files": file_records(root, scoring_files),
+            })
         for row in rows:
             score = score_with_parser(row["raw_response"], row["question_type"], row["options"], row["answer"],
-                                      parser_id, row.get("finish_reason"))
+                                      parser_id, row.get("finish_reason"), question=row.get("question", ""))
             different = any(score[key] != row[key] for key in ("parsed_answer", "parse_status", "correct"))
             changed += different
             transitions[f"{int(row['correct'])}->{int(score['correct'])}"] += 1
@@ -152,6 +164,8 @@ def rescore_main():
             if row["id"] not in writer.completed:
                 writer.save(row | score)
         summary = finalize(destination, [r["id"] for r in rows], "full")
+        if parser_id == "team-final-answer-v8":
+            render(destination, include_images=False)
         write_json(destination / "comparison.json", {"changed_samples": changed, "scoring_sha256": scoring_hash,
                                                     "parser": parser_id, "transitions": transitions,
                                                     "observed_stage_counts": dict(stages),

@@ -1,297 +1,100 @@
-# Qwen3-VL-4B MMMU validation baseline
+# MMDL — Assignment #1
 
-Assignment 1의 고정 BF16 모델과 validation 900문제를 평가한다.
-현재 실행 상태와 GPU 검증 증거는 [PROJECT_STATUS](docs/PROJECT_STATUS.md),
-P0·generation·공식 parser 근거는 [SOURCE_REVIEW](docs/SOURCE_REVIEW.md)에 있다.
-MMMU-Pro 10-way는 다운로드·해시 확인만 하며 평가하지 않는다.
+Qwen3-VL-4B-Instruct의 MMMU validation **900문항 평가 파이프라인**입니다.
+현재 기준은 `team-final-answer-v8`입니다. 공식 점수에 맞춰 답을 고르지 않으며,
+이후 학습 모델도 같은 프롬프트·생성·이미지·채점 조건으로 비교합니다.
 
-2026-09-23: 기존 두900 결과의 원본 V2 감사 코드를 확보하여536/900·584/900을 CPU 재현했다.
-이는 원래427/900·459/900과 구분되는 재채점이다. 새 LLM 없는 채점·공식 이미지 경로의
-[A/B/C 통제](docs/EVALUATION_V2.md)는18개·오류0으로 완료했다. 이후 동시1 부분900은 사용자 요청으로
-Pod와 함께 폐기했다. 새 [동시2 protocol](configs/eval/mmmu_val_official_vllm_b2_v2.yaml)은 C의
-이미지·sampling·채점을 유지하며, GitHub 고정 commit에서 새900을 실행한다. 아직 완료 점수는 없다.
+- **보고서:** [Assignment_1.md](Assignment_1.md)
+- **수업 지정 경로:** [reports/mmmu_baseline.md](reports/mmmu_baseline.md), [assignment/assignment1.md](assignment/assignment1.md)
+- **확정 결과:** [점수·검증 요약](results/scoring-v8-20260924/summary.json), [30과목 × 세 실행 표](results/scoring-v8-20260924/subject_scores.csv)
 
-## 환경
+| 저장된 추론 실행 | V8 CPU 재채점 |
+|---|---:|
+| 2,048토큰 | 478/900 · 53.11% |
+| 이전 32,768토큰 | 554/900 · 61.56% |
+| 고해상도 32,768토큰 — 제출 baseline | 558/900 · 62.00% |
 
-Python 3.12 Linux/WSL에서 저장소 밖에 환경을 만든다. Windows GPU driver를 유지한다.
+새 GPU 추론이나 fine-tuning 점수가 아닙니다. 원래 RTX3090 실행의 응답은 보존했고
+V8으로만 재채점했습니다. 공식 비교값67.4%와의 격차, 구현 출처와 한계는 보고서에 있습니다.
+V8의 새 GPU 실행·실제 RTX4090 검증·학습은 아직 하지 않았습니다.
+
+## 1. 환경과 저장 위치
+
+Linux/WSL, Python3.12, NVIDIA CUDA 사용 가능 환경이 필요합니다.
+권장 경로는 RTX4090/3090 24GB의 vLLM·BF16·동시2 연속 처리입니다.
+가중치·MMMU 원문·이미지·대형 응답은 Git 저장소 밖에 저장합니다.
 
 ```bash
 python3.12 -m venv "$HOME/mmdl-env"
 source "$HOME/mmdl-env/bin/activate"
-pip install -r env/requirements-eval.lock
+pip install -r env/requirements-vllm.lock
 pip install --no-deps -e .
 export HF_HOME="$HOME/mmdl-cache/huggingface"
 export MMDL_DATA_ROOT="$HOME/mmdl-data"
 export MMDL_ARTIFACT_ROOT="$HOME/mmdl-artifacts"
 export CUDA_VISIBLE_DEVICES=0
-bash scripts/doctor.sh --output "$MMDL_ARTIFACT_ROOT/doctor.json" \
-  --storage-path "$HF_HOME" --storage-path "$MMDL_DATA_ROOT" --required-gib 35
+export MMDL_JOB_ID=baseline-v8
 bash scripts/test_reference.sh
 ```
 
-`nvidia-smi`의 CUDA 표시는 driver 한계, torch의 CUDA는 wheel runtime이다.
-doctor는 BF16 실제 연산, `sm_120`, WSL 가용 RAM과 VHDX의 Windows 잔여량을 검사한다.
-다운로드/변환 추정 peak 공간 외에 50 GiB 여유를 요구한다.
+vLLM lock은 실제 추론 환경에 검사 도구(Ruff/mypy 및 의존 패키지)의 고정 버전을 추가한 것이다.
+원본 실행 당시 환경은 별도 `environment.json` 기록과 구분한다.
 
-## 자료와 평가
+`--model-path`는 아래 공식 ID 또는 동일 revision의 로컬 snapshot을 받습니다.
+`--data-root`는 기본 위치에서 자동 취득하거나, 준비된 `manifest.json`과 30개
+validation parquet가 있는 경로를 받습니다. 다른 경로는 환경변수/인자로 바꾸면 됩니다.
+고정 revision·파일 hash·BF16을 검사하며, OOM이라고 모델/해상도/길이를 자동 변경하지 않습니다.
 
-```bash
-python -m mmdl.data.download
-```
-
-공식 model revision `ebb281ec70b05090aa6165b016eac8ec08e71b17`의 필요한 파일,
-MMMU revision `98e6ac0cb9b7b2cd2c991b85a50762edc4aedc68`의 30개 validation parquet,
-MMMU-Pro revision `563f3e84bb3b90893083a1f039cfa13077f2302b`의 Standard 10-way
-test parquet 두 개만 취득한다. 데이터 파일은 표준 HF cache를 가리키는 링크로 보관한다.
-30개 원본 subject 파일을 검증한 로컬 snapshot에서 각각 `name=subject`인 Parquet config로
-로드한다. 원본 README의 split metadata는 dev/test도 요구하므로, validation 전용 취득에는
-이 로더를 쓰고 파일 hash·과목당 30개·전체 900개 ID를 별도로 강제 검증한다.
-`data_files`로 validation을 명시하여 dev/test를 로드하지 않는다. 파일 해시는 `manifests/`에,
-실제 개인 저장 위치는 외부 `setup/locations.json`에 둔다.
-
-로컬 5060은 아래 30문제 검증까지만 실행한다. CPU-offload profile의 `full`은 거부한다.
-누락된 기본 자료는 자동 준비하며 학습/증강은 실행하지 않는다. 전체 평가는 사전 검증 후
-`FROZEN` protocol과 GPU-only 장비에서만 실행한다.
-
-```bash
-bash scripts/eval.sh --protocol configs/eval/mmmu_val_v1.yaml \
-  --hardware configs/hardware/rtx5060_8gb.yaml \
-  --model-ref manifests/models/baseline.json \
-  --model-path Qwen/Qwen3-VL-4B-Instruct \
-  --data-root "$MMDL_DATA_ROOT/evaluation/mmmu" --run-id smoke-accounting \
-  --mode partial --subject Accounting
-```
-
-`--model-path`는 검증된 로컬 snapshot 경로로 바꿀 수 있다. `--data-root`도
-manifest와 30개 validation parquet가 있는 위치로 교체한다. baseline은 공식 base만 받는다.
-이후 학습 모델은 `--model-ref`와 `--model-path`를 교체한다. `kind`는
-`full`/`merged`/`adapter`를 지원하며 `base: {id, revision}`, `dtype: bfloat16`,
-`processor_revision`, 파일별 `path/bytes/sha256`, `train_config_sha256`,
-`data_manifest_sha256`, `code_commit`, `artifact_revision`을 요구한다.
-`--base-path`로 원본 위치를 지정한다. processor/P0/생성/채점은 원본과 동일하다.
-실제 학습 checkpoint 검증은 해당 artifact가 생긴 뒤 수행해야 한다.
-
-4090에서는 같은 평가 설정에 다음 profile과 별도 run ID를 쓴다. 실제 4090 검증은 미실행이다.
-
-```bash
-bash scripts/eval.sh --protocol configs/eval/mmmu_val_v1.yaml \
-  --hardware configs/hardware/rtx4090_24gb.yaml \
-  --model-ref manifests/models/baseline.json --model-path Qwen/Qwen3-VL-4B-Instruct \
-  --data-root "$MMDL_DATA_ROOT/evaluation/mmmu" --run-id baseline-4090 --mode full
-```
-
-사전 검증은 별도 ID와 `--mode smoke --limit 1`,
-`--mode partial --subject Accounting`을 사용한다. 추가 다중 이미지/주관식은
-`--sample-id`를 반복 지정한다. 정답률은 설정 변경 기준이 아니다.
-중단한 실행은 같은 명령에 `--resume --no-download`를 더한다.
-모델·protocol·코드·환경·장비·ID가 달라지면 재개를 거부한다.
-완료된 샘플은 재생성하지 않는다. OOM에 자동 fallback은 없다.
-
-## 결과 확인과 재채점
-
-외부 `MMDL_ARTIFACT_ROOT/runs/<run-id>/`에 샘플별 JSON, 원문 전체 `predictions.jsonl`,
-이미지 PNG, 실제 messages/입력 tensor hash, `review.html`을 보존한다.
-HTML을 로컬 브라우저로 열면 질문·모델 출력·정답을 확인할 수 있다.
-설명 필드는 생성된 응답 원문이며 별도 풀이를 만들어 추가하지 않는다.
-`results/<run-id>/`에는 작은 성적표·설정·환경·외부 artifact 상대참조/해시만 둔다.
-
-```bash
-bash scripts/rescore.sh --run-id baseline-4090 --verify
-python scripts/validate_run.py --run-dir "$MMDL_ARTIFACT_ROOT/runs/baseline-4090" \
-  --public-dir results/baseline-4090
-python scripts/check_submission.py
-```
-
-재채점은 저장 응답만 사용해 별도 `rescoring/<parser-hash>/`에 쓴다.
-파싱 실패와 빈 응답은 900개 분모에 포함되는 오답이다. 시스템 오류/누락이 남으면
-`INCOMPLETE`이고 제출 가능한 최종 점수가 아니다.
-공식 비교값 67.4는 수업 제시값이며 실측값이 아니다.
-실제 게시 전에는 명시적으로 선택한 파일만 stage하고
-`python scripts/check_submission.py --staged`로 **index의 실제 내용**을 검사한다.
-가중치·cache·venv·강의 원본·전체 응답·이미지는 게시하지 않는다.
-
-## RunPod: GitHub 고정 commit에서 단일 평가
-
-팀 저장소는 `https://github.com/jang2296/MMDL.git`이다. 로컬 30문제와 필요한 구조별
-smoke 통과 후 공통 protocol을 동결하고 검사된 feature commit을 게시한다.
-RunPod에는 로컬 코드/venv/모델/cache/결과를 복사하지 않는다. 아래 경로는 현재
-코드·CPU 검사를 통과했고 RunPod의 GitHub clean clone·lock 설치를 확인했다.
-**기존3090의 GPU/BF16/smoke는 통과했지만 canonical evaluation 900개 전체 평가는 아직 완료되지 않았다.**
-
-사용자가 승인한 3090 대안은 `configs/hardware/rtx3090_24gb.yaml`이다.
-기본값은 계속 4090이며, 아래 `reproduce.sh` 실행·재개에
-`--hardware configs/hardware/rtx3090_24gb.yaml`을 추가하면 3090 프로필을 선택한다.
-기존 5090 대안은 `configs/hardware/rtx5090_32gb.yaml`로 보존한다.
-하드웨어 프로필은 BF16/P0/generation/parser를 바꾸지 않으며 CPU offload하지 않는다.
-batch/backend/kernel은 아래 명시적 평가 protocol에서 선택하고 하드웨어 profile로 덮어쓰지 않는다.
-선택한 프로필과 실제 단일 GPU 이름·VRAM이 다르면 중단한다. 대여 직후 CUDA 초기화,
-설치 후 실제 BF16 연산을 확인한다. 기존 2,048-token 3090 실행은 900개 완료·로컬 검증·
-회수 후 Pod를 삭제했다. 이는 진행 중인 canonical 32k 평가의 완료를 뜻하지 않는다.
-
-기본 strict 정책에서는 배포 전 총 예산·GPU/디스크 실단가·회수 여유를 포함한 최대시간과 독립적인 STOP
-watchdog을 정한다. 승인된 전체 예산을 job manifest에 기록하며 승인 없는 초과,
-자동 충전·승인 범위를 벗어난 추가 Pod/GPU 전환은 금지한다. 기본은 단일 GPU와 작업 전용 Pod volume,
-별도 Network Volume은 생성하지 않는다. 아래 watchdog 값은 실제 외부 감시를 가동한
-제어측의 기록이어야 하며 임의 문자열로 gate를 통과시키면 안 된다. 재현 스크립트는
-Pod를 생성하거나 과금을 중지하지 않으므로, 프로세스 종료를 Pod stop으로 간주하지 않는다.
-승인 예산과 실제 계정 잔액은 별개다. 배포 전 잔액에도 회수/보존 여유가 있는지 확인한다.
-[공식 과금 안내](https://docs.runpod.io/pods/pricing)에 따르면 잔액 소진 시 별도 network volume이
-없는 Pod는 종료되어 데이터가 소실될 수 있다. 자동 충전/결제 설정은 변경하지 않는다.
-
-현재 사용 가능한 공식 베이스 이미지는 `runpod/base:1.3.2-rc.169-ubuntu2404`의 Linux amd64
-digest `sha256:a5aead56b5ed7754235250afface107a8a19646ac34f62c87e5f41eb147fa7b2`이다.
-기존 `runpod/pytorch` CUDA 12.8 이미지는 현재 3090 호스트의 CUDA 12.7 환경에서
-Python 초기화 전에 `CUDA>=12.8` 요구조건으로 거부되므로 사용하지 않는다. 새 베이스는
-Ubuntu 24.04/Python 3.12이며 `NVIDIA_REQUIRE_CUDA`를 설정하지 않는다. 별도 venv에
-`env/requirements-eval.lock`을 설치하고 `torch==2.8.0+cu128`은 그대로 유지한다.
-컨테이너 선택이 호스트 호환성을 보장하는 것은 아니므로, 실제 Pod에서 doctor와 BF16
-연산 검사를 통과하기 전에는 평가 성공을 주장하지 않는다.
-
-### 가속 전환과 단일 평가 실행
-
-2026-09-22 최신 승인 순서는 로컬 smoke/부분 검증→GitHub→단일3090 `mmmu-val` 평가900→
-검증·회수·정리다. 기존 실행 중 Pod와 legacy A/B artifact는 이 문서 변경만으로 중지·삭제·재배포하지 않는다.
-최초 USD6.80 상한은 과거 승인 기록이며, 이후 사용자가 비용 제한을 철회한 승인과 구분한다.
-이후 사용자가 비용 상한을 더 이상 적용하지 않겠다고 명시적으로 승인한 새 배포에서는
-`MMDL_COST_POLICY=user_waived`를 opt-in으로 지정할 수 있다. 이는 자동충전·결제 설정 변경이
-아니며, 실제 단가·storage reserve·회수·정리 기록은 계속 유지한다. 기본 정책은 strict다.
-
-| protocol 파일 | 실행 방식 | 용도 |
+| 대상 | 고정 revision | 현재 용도 |
 |---|---|---|
-| `mmmu_val_v1.yaml` | Transformers, batch1, SDPA math | 기존 reference 보존 |
-| `mmmu_val_fast_transformers_v1.yaml` | Transformers, batch1, 자동 SDPA, 토큰 streamer 없음 | 로컬8GB 추가1문제 |
-| `mmmu_val_fast_vllm_v1.yaml` | vLLM0.11.0, 고정 batch2, BF16 GPU-only, 출력 상한32768 | 과거 분석 기록 보존 |
-| `mmmu_val_continuous_vllm_v1.yaml` | vLLM0.11.0, continuous scheduling, 최대 active2, BF16 GPU-only, 출력 상한32768 | canonical 단일 evaluation protocol; 3문제 GPU SMOKE 통과 |
+| `Qwen/Qwen3-VL-4B-Instruct` | `ebb281ec70b05090aa6165b016eac8ec08e71b17` | BF16·비양자화; processor/tokenizer도 동일 revision |
+| `MMMU/MMMU` | `98e6ac0cb9b7b2cd2c991b85a50762edc4aedc68` | validation 30과목 × 30문항 = 900 평가 |
+| `MMMU/MMMU_Pro` | `563f3e84bb3b90893083a1f039cfa13077f2302b` | Standard 10-way 다운로드·hash 확인만; 평가하지 않음 |
 
-모델/processor revision·MMMU900·P0·sampling·이미지 budget·채점은 같다.
-새 `mmmu-val-fast-vllm-32k-continuous-v1`은 사용자 승인으로 Qwen 공식 평가 recipe의 생성 상한32768을 적용한다.
-기존 reference와 완료된 로컬 fast1 smoke의2048은 과거 설정으로 보존하며 새 결과와 합치지 않는다.
-전체 문맥 한도는36864로 둔다. 고정 processor의900개 CPU 전처리 최대 입력2655에
-출력32768을 더한35423보다 크며, 입력+생성 예산 초과 시 잘라내지 않고 중단한다.
-EOS가 나오면 상한까지 채우지 않고 종료한다. 메모리/비용이 부족해도 생성 상한을 자동 축소하지 않는다.
-백엔드별 계산/난수 구현이 다르므로 동일 응답을 보장하지 않으며 이전 reference 결과와 합치지 않는다.
-vLLM의 `deterministic: false`는 PyTorch deterministic-kernel 강제를 주장하지 않는다는 뜻이다.
-공식 sampling 값과 문제별 seed는 그대로 고정한다.
-vLLM은 PyTorch SDPA/streamer 경로를 사용하지 않는다. 로컬1문제 성공은 vLLM 검증이 아니다.
+앞의 두 revision은 Assignment #1 지정값이다. MMMU-Pro는 별도 저장소이며 그 revision은
+팀이 취득한 버전을 고정한 값이지 과제의 MMMU revision을 재사용한 것이 아니다.
+준비 단계는 모델·데이터를 Hugging Face에서 취득하거나 동일 revision의 캐시를 검증해 재사용한다.
+GitHub 웹에서 실행 버튼을 누르는 방식이 아니라, GPU 환경에서 저장소를 clone한 뒤 아래 Bash 명령을 실행한다.
+
+## 2. 900문항 평가 — 한 명령
+
+깨끗한 Git checkout에서 실행합니다. 아래 명령은 실제 GPU 추론을 시작합니다.
+3090에서는 hardware 파일만 `configs/hardware/rtx3090_24gb.yaml`로 바꿉니다.
 
 ```bash
-bash scripts/eval.sh --protocol configs/eval/mmmu_val_fast_transformers_v1.yaml \
-  --hardware configs/hardware/rtx5060_8gb.yaml --run-id smoke-fast-local-one \
-  --mode smoke --sample-id validation_Accounting_1 --no-download
-
-# GitHub clean clone 이후, 승인된 3090에서 단일 evaluation run을 실행한다.
-bash scripts/reproduce.sh --commit "$MMDL_CODE_COMMIT" --job-id "$MMDL_JOB_ID" \
-  --protocol configs/eval/mmmu_val_continuous_vllm_v1.yaml \
-  --hardware configs/hardware/rtx3090_24gb.yaml --suite mmmu-val --execute
+bash scripts/eval.sh --protocol configs/eval/mmmu_val_v8.yaml --hardware configs/hardware/rtx4090_24gb.yaml --model-ref manifests/models/baseline.json --model-path Qwen/Qwen3-VL-4B-Instruct --data-root "$MMDL_DATA_ROOT/evaluation/mmmu" --artifact-root "$MMDL_ARTIFACT_ROOT" --public-root "$MMDL_ARTIFACT_ROOT/public" --job-id "$MMDL_JOB_ID" --run-role evaluation --require-commit "$(git rev-parse HEAD)" --run-id "${MMDL_JOB_ID}-evaluation" --mode full
 ```
 
-새 run은 `mmmu-val` suite에서 smoke 후 단일 900문제를 수행한다. 저장 결과 하나가 점수와
-실패 검토의 공통 근거이며, 별도 분석용/테스트용 900 run은 만들지 않는다.
-각 suite는 설치 전 `nvidia-smi`/libcuda `cuInit(0)`/UVM 접근을 검사하고,
-protocol에 맞는 exact lock을 별도 venv에 설치한 뒤 `pip check`/doctor/BF16 검사를 한다.
-`MMDL_CONTAINER_IMAGE`에 실제 digest를 기록한다. 호스트 CUDA 장애는 컨테이너 안에서 고치거나
-driver 검사를 우회하지 않는다. vLLM은 Accounting1·Biology29(5이미지)의 동시 smoke 후 선택900만 실행한다.
+프롬프트P0, 출력32768, sampling0.7/0.8/20·presence1.5, 이미지1003520–4014080,
+context40960을 고정합니다. 다른 YAML은 기존 실행 재현·회귀 검사에 필요한 버전이며
+현재 제출용 진입점은 **mmmu_val_v8.yaml 하나**입니다.
 
-vLLM은 `env/requirements-vllm.lock`을 사용한다. Torch2.8/cu128·Transformers4.57.1은 유지하되
-Numba 호환 NumPy2.2.6과 vLLM 허용 setuptools를 별도로 고정한다. 기존 eval lock/venv는 변경하지 않는다.
-vLLM 입력 token IDs는 pinned processor reference와 정확히 비교하고 불일치는 중단한다.
-reference pixel tensor hash는 vLLM 내부 tensor를 직접 검증했다는 뜻이 아니다.
-continuous scheduling은 vLLM0.11.0의 `LLMEngine.add_request()`/`step()`으로 최대 2개 request를
-active 상태로 유지한다. 한 request가 완료되면 최종 출력 row를 즉시 저장하고 다음 request를 refill하므로,
-고정 batch처럼 두 request의 완료를 함께 기다리지 않는다.
-`generation_seconds`는 step wall time을 active request 수로 배분한 분석용 값이고
-`request_latency_seconds`와 분리한다. 전체 처리량은 engine invocation wall time으로 계산한다.
-이 protocol은 실제 3090에서 3문제 SMOKE/slot refill을 검증했으며, 900문제는 아직 진행 중이다.
-기존 고정 batch 결과와 합치지 않는다. [검증 기록](claudedocs/continuous_vllm_20260922.md)을 참고한다.
-worker allocator peak를 얻지 못하면 `null`로 기록하고, GPU 전체 메모리 snapshot 관측값과 구별한다.
+학습 후에는 `--model-ref`와 `--model-path`를 해당 checkpoint manifest/path로 바꿉니다.
+`full/merged/adapter`의 base revision·학습 설정·데이터 hash·artifact 출처를 요구합니다.
+실제 학습 코드/학습 결과는 아직 완료되지 않았으며, 빈 학습 구현을 제출하지 않습니다.
 
-단일-role bundle은 명시된 역할의900개만 검증하며 receipt도 해당 job/Pod에만 유효하다.
-분석 receipt로 다른 기존 Pod를 자동 삭제할 수 없다. 기존 partial 결과는 별도로 회수·hash 검증한다.
-단일 평가 결과의 commit/protocol/model/data/lock을 확인하며, 별도 실험과 비교할 때는 호스트 driver/환경 차이도 기록한다.
+## 3. 결과 확인·CPU 재채점·보고서
 
-Git과 Python 3.12가 있는 승인 Pod에서, 실제 영구 볼륨 mount를 `MMDL_VOLUME_ROOT`로
-지정하고 그 아래 **서로 분리된** `HF_HOME`, `MMDL_DATA_ROOT`, `MMDL_ARTIFACT_ROOT`,
-`MMDL_VENV_ROOT`를 지정한다. 체크아웃 밖에 cache/env/결과를 둔다.
-`MMDL_STORAGE_RESERVE_GIB`는 설치·다운로드·Arrow 변환·평가 결과·압축 peak 외의 여유다.
-서버 여유는 대여 용량에 맞춰 명시하며 로컬 WSL의 최소 50 GiB는 낮출 수 없다.
-`MMDL_BUDGET_USD`, `MMDL_STOP_DEADLINE_UTC`, `MMDL_WATCHDOG_ID`와 provider가 주는
-`RUNPOD_POD_ID`를 기록한다. 이미지가 이 환경변수를 제공하지 않으면 provider API/콘솔에서
-확인한 실제 Pod ID를 실행 shell에 명시한다. 비밀 API 키는 저장소나 명령줄에 넣지 않는다.
-
-`MMDL_CODE_COMMIT`은 게시된 **40자리 전체 SHA**, `MMDL_JOB_ID`는 새 job ID,
-`MMDL_CHECKOUT`은 영구 볼륨 아래 새 디렉터리다. 다음 **한 shell 호출**이 GitHub 취득부터
-SHA 확인·lock 설치·doctor·공식 pinned 다운로드·최소 GPU smoke·단일 evaluation900·검증/포장까지 실행한다.
+`$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation/`에 원문 JSONL, 샘플 JSON,
+과목별 점수/시간 CSV, 환경·설정·입력/소스 hash와 `review.html`이 저장됩니다.
+공유 이미지는 외부 `assets/images/`에 있습니다. 시스템 오류/누락은 `INCOMPLETE`이며,
+빈 답/추출 실패는 전체900 분모에 포함합니다.
 
 ```bash
-bash -c '
-  set -euo pipefail
-  : "${MMDL_CODE_COMMIT:?full commit required}" "${MMDL_JOB_ID:?job ID required}" "${MMDL_CHECKOUT:?new checkout required}"
-  [[ "$MMDL_CODE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-  test ! -e "$MMDL_CHECKOUT"
-  git clone --filter=blob:none --no-checkout https://github.com/jang2296/MMDL.git "$MMDL_CHECKOUT"
-  git -C "$MMDL_CHECKOUT" fetch --depth=1 origin "$MMDL_CODE_COMMIT"
-  git -C "$MMDL_CHECKOUT" checkout --detach "$MMDL_CODE_COMMIT"
-  test "$(git -C "$MMDL_CHECKOUT" rev-parse HEAD)" = "$MMDL_CODE_COMMIT"
-  exec bash "$MMDL_CHECKOUT/scripts/reproduce.sh" --stage evaluate --target runpod \
-    --suite mmmu-val --commit "$MMDL_CODE_COMMIT" --protocol configs/eval/mmmu_val_continuous_vllm_v1.yaml \
-    --job-id "$MMDL_JOB_ID" --execute
-'
+export NEW_RESCORE_DIR="$MMDL_ARTIFACT_ROOT/rescores/${MMDL_JOB_ID}-v8"
+bash scripts/rescore.sh --artifact-root "$MMDL_ARTIFACT_ROOT" --run-id "${MMDL_JOB_ID}-evaluation" --parser team-final-answer-v8 --output-dir "$NEW_RESCORE_DIR"
+python -m scripts.validate_rescore --source-run "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" --scored-dir "$NEW_RESCORE_DIR"
+python -m scripts.report_baseline --run-dir "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" --scored-dir "$NEW_RESCORE_DIR" --output Assignment_1.md
 ```
 
-`reproduce.sh`만 `--execute` 없이 호출하면 dry-run이며 파일·환경·GPU를 변경하지 않는다.
-위 전체 shell 호출은 Git clone/fetch를 수행하므로 dry-run에 사용하지 않는다.
-중단된 동일 job은 이미 취득한 checkout에서 아래처럼 재개한다. 완료 run은 다시 추론하지 않는다.
+재채점은 GPU/LLM 없이 수행하며 기존 결과 폴더를 덮어쓰지 않습니다.
+보고서 생성은 원본 GPU 실측과 새 CPU 점수를 분리하고 두 제출 경로를 동기화합니다.
+원본 응답을 배포하지 않아도 위 평가 명령으로 데이터를 정식 취득해 새 실행할 수 있습니다.
+기존 응답의 완전 동일 재채점에는 별도 보존 원장이 필요하며 이 저장소에 포함되지 않습니다.
 
-```bash
-bash "$MMDL_CHECKOUT/scripts/reproduce.sh" --commit "$MMDL_CODE_COMMIT" \
-  --suite mmmu-val --protocol configs/eval/mmmu_val_continuous_vllm_v1.yaml \
-  --job-id "$MMDL_JOB_ID" --resume --execute
-```
+## 4. 저장소 범위
 
-`--model-path`/`MMDL_MODEL_PATH` 및 이미 준비된 `--data-root`도 받을 수 있으며, 새 취득 위치는
-HF_HOME/MMDL_DATA_ROOT로 바꾼다. 환경·commit·입력/설정이 다르면 재개를 거부한다.
-
-- `<job>-evaluation`: canonical 단일 900 run. 저장 raw response와 결과 record를 점수와 실패 검토에 함께 사용한다.
-- `<job>-assignment`/`<job>-analysis`: 기존 legacy artifact 이름. 새 run으로 재분류하거나 서로 섞지 않고 읽기 전용 역사 자료로 보존한다. legacy 재개/재채점은 기록된 원래 commit/protocol을 사용하며 최신 CLI의 새 role로 재실행하지 않는다. 완료된 continuous32k legacy 900 run은 독립 검증 후 canonical score 근거로 채택할 수 있다.
-- `<job>-smoke`: 별도 최소 GPU 검증이며 full 900 inference 집계에 포함하지 않는다.
-
-코드는 하나의 full run을 실행한다. 읽기 전용 모델/데이터 cache와
-lock 환경만 재사용하며, 이미지 PNG는 외부 `assets/images/<sha256>.png`에 한 번 보존한다.
-샘플별 원문/실제 모델 설명/토큰/추론 ID/호출 기록은 각 run에 별도로 보존한다.
-공개용 작은 결과도 실행 중 checkout을 더럽히지 않도록 외부 `public/<run>/`에 쓴다.
-설치/doctor/다운로드/추론/재채점/검사 로그와 시간이 `jobs/<job>.*`에 남는다.
-
-## 결과 회수와 정리
-
-원격 `bundles/<job>.tar.gz`와 `.sha256`를 Full SSH의 SCP/rsync로 로컬
-`MMDL_ARTIFACT_ROOT` 아래로 **pull**한다. 모델/venv/HF 전체 cache는 묶지 않는다.
-예를 들어 전송 설정을 확인한 뒤 `scp -P "$SSH_PORT" "$SSH_TARGET:$REMOTE_BUNDLE" "$LOCAL_BUNDLE"`
-및 hash sidecar를 회수하고, 원격에서 기록한 SHA와 비교한다.
-
-```bash
-python -m mmdl.runtime.bundle verify --archive "$LOCAL_BUNDLE" --sha256 "$BUNDLE_SHA256" \
-  --destination "$MMDL_ARTIFACT_ROOT/imports/$MMDL_JOB_ID" --repository "$MMDL_CHECKOUT"
-```
-
-검증용 로컬 checkout도 실행 commit과 code hash가 같아야 한다. 검증은 안전한 압축해제,
-파일별 SHA, evaluation 900 ID·30과목 산술·저장 raw 재채점, 호출 기록,
-이미지 decode와 viewer 링크까지 확인한 뒤 `local_receipt.json`에 `LOCAL_VERIFIED`를 쓴다.
-`imports/<job>/runs/<job>-evaluation/review.html`을 브라우저로 실제 확인한다.
-
-로컬 제어측은 생성 전 계정 자원 목록과 이 job의 정확한 Pod/전용 storage ID를 resource
-ledger에 보관한다. `python -m mmdl.runtime.bundle cleanup-targets --receipt "$LOCAL_RECEIPT" \
---resources "$RESOURCE_LEDGER" --pod-id "$OWNED_POD_ID"`는 검증된 **정확한 삭제 대상만**
-출력하며 그 자체로 삭제하지 않는다. 이후 연결된 관리 API로 해당 Pod를 Delete/Terminate,
-별도 생성한 미공유 전용 Network Volume이 있다면 삭제하고 계정에서 소멸을 재조회한다.
-Stop만으로 cleanup 완료를 선언하지 않는다. API 결과·시각·잔존 조회는 로컬에 남긴다.
-
-회수/검증 실패 시 원격 유일 사본을 삭제하지 않는다. Pod volume의 보존을 확인하고
-외부 watchdog/관리 API로 GPU를 Stop한 뒤 `RECOVERY_REQUIRED/CLEANUP_PENDING`, 남은
-storage 비용과 정확한 복구 경로를 보고한다. 원인별 재시도는 최대3회다.
-첫 Assignment 보고서는 회수·검증된 canonical evaluation run으로 `scripts/report_baseline.py`에서 생성한다.
-정본은 사용자 지정 루트 `Assignment_1.md`이며, 과제 §4 경로 `reports/mmmu_baseline.md`에도
-같은 본문을 동기화한다. `assignment/assignment1.md`는 두 경로를 안내한다.
-
-향후 승인된 MMMU test/MMMU-Pro도 같은 GitHub clean-clone·GPU-only·회수/삭제 정책을 쓴다.
-현재 suite는 validation `mmmu-val`만 허용하며 final suite는 거부한다. final protocol/revision/정답
-경로를 별도 확정하기 전에는 최종 평가 성공이나 지원 완료를 주장하지 않는다.
+`src/` 평가기, `scripts/` 실행·검증, `configs/` 고정 조건, `env/` exact lock,
+`prompts/` P0, `manifests/` 모델/데이터 hash, `third_party/` 고정 출처·license,
+`tests/` CPU 회귀 검사, `results/` 작은 확정 집계만 포함합니다.
+내부 에이전트 지침, 개발 대화/감사 폴더, 강의 PDF, 모델·데이터 원문은 공개하지 않습니다.

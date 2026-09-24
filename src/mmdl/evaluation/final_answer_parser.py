@@ -33,6 +33,8 @@ _ANSWER_MARKER = re.compile(
 _CORRECT_MARKER = re.compile(
     r"\b(?:correct|best)\s+(?:answer|option|choice)\b"
     r"(?=\s*(?:(?:is|should\s+be|would\s+be)\b|[:=]|\n))", re.IGNORECASE)
+_HYPOTHETICAL_LEAD = re.compile(
+    r"\b(?:if|whether|suppose|assuming|maybe|perhaps)\b[^.\n]*$", re.IGNORECASE)
 _BOX = re.compile(r"\\boxed\s*\{((?:[^{}]|\{[^{}]*\})*)\}", re.IGNORECASE)
 _DECIMAL = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 _RATIONAL = re.compile(
@@ -91,26 +93,46 @@ def _choices(options: Sequence[str] | Mapping[str, str]) -> dict[str, str]:
     return choices
 
 
-def _asserted_spans(text: str) -> list[tuple[str | None, str]]:
+def _answer_declarations(text: str, parser_id: str) -> list[re.Match[str]]:
+    # V4 keeps its historical phrase priority. V5 uses response order: a later
+    # explicit Answer must not be hidden by an earlier correct/best declaration.
+    declarations = list(_ANSWER_MARKER.finditer(text))
+    if parser_id == VERSION:
+        return list(_CORRECT_MARKER.finditer(text)) or declarations
+    # A hypothetical mention is not a declaration; remove it before selecting
+    # the last answer, including declarations inside a dedicated final section.
+    qualified = []
+    for marker in declarations:
+        prefix = text[:marker.start()]
+        if parser_id == "team-final-answer-v5":
+            prefix = prefix[-35:]  # Preserve the saved V5 candidate's context window.
+        else:
+            prefix = prefix.rsplit("\n", 1)[-1]
+        # V6 checks the full current line; the regex stops at the previous period.
+        # Long conditional clauses must not turn into asserted answers by truncation.
+        if not _HYPOTHETICAL_LEAD.search(prefix):
+            qualified.append(marker)
+    return qualified
+
+
+def _asserted_spans(text: str, parser_id: str = VERSION) -> list[tuple[str | None, str]]:
     """Explicit final sections outrank earlier answer assertions and rationale mentions."""
     spans: list[tuple[str | None, str]] = []
     finals = list(_FINAL_MARKER.finditer(text))
-    declarations = list(_CORRECT_MARKER.finditer(text)) or list(_ANSWER_MARKER.finditer(text))
+    declarations = _answer_declarations(text, parser_id)
     # Without a dedicated final section, use the last explicit declaration, not all
     # intermediate assertions. An invalid last declaration still cannot fall back.
     markers = finals or declarations[-1:]
     for index, marker in enumerate(markers):
         lead = text[max(0, marker.start() - 35) : marker.start()]
-        if not finals and re.search(
-            r"(?i)\b(?:if|whether|suppose|assuming|maybe|perhaps)\b[^.\n]*$", lead
-        ):
+        if parser_id == VERSION and not finals and _HYPOTHETICAL_LEAD.search(lead):
             continue
         end = markers[index + 1].start() if index + 1 < len(markers) else len(text)
         tail = text[marker.end():end]
         if finals:
             # A final section can state a value, then explicitly map it to an option.
             # Only a syntactic declaration inside this section may supersede its first line.
-            declarations = list(_CORRECT_MARKER.finditer(tail)) or list(_ANSWER_MARKER.finditer(tail))
+            declarations = _answer_declarations(tail, parser_id)
             if declarations:
                 declaration = declarations[-1]
                 tail = tail[declaration.end():]
@@ -176,14 +198,18 @@ def extract_mcq(
     raw: Any,
     options: Sequence[str] | Mapping[str, str],
     finish_reason: str | None = None,
+    *,
+    parser_id: str = VERSION,
 ) -> dict[str, Any]:
     """Extract one explicit MCQ answer without seeing the question or gold answer."""
+    if parser_id not in {VERSION, "team-final-answer-v5", "team-final-answer-v6"}:
+        raise ValueError(f"Unknown final-answer scoring version: {parser_id}")
     if raw is None or not str(raw).strip():
         return _result(None, EMPTY, "empty", "")
     choices = _choices(options)
     text = _plain(raw)
 
-    assertions = _asserted_spans(text)
+    assertions = _asserted_spans(text, parser_id)
     if assertions:
         candidates = [_mcq_candidate(span, choices)[0] if span is not None else None
                       for span, _ in assertions]
@@ -282,12 +308,15 @@ def _open_equal(left: Any, right: Any) -> bool:
     return left_text == right_text
 
 
-def extract_open(raw: Any, finish_reason: str | None = None) -> dict[str, Any]:
+def extract_open(raw: Any, finish_reason: str | None = None, *,
+                 parser_id: str = VERSION) -> dict[str, Any]:
     """Extract one terminal open answer with no semantic or tolerance-based guessing."""
+    if parser_id not in {VERSION, "team-final-answer-v5", "team-final-answer-v6"}:
+        raise ValueError(f"Unknown final-answer scoring version: {parser_id}")
     if raw is None or not str(raw).strip():
         return _result(None, EMPTY, "empty", "")
     text = _plain(raw)
-    assertions = _asserted_spans(text)
+    assertions = _asserted_spans(text, parser_id)
     if assertions:
         normalized = [_normalize_open(span) if span is not None else (None, None, False)
                       for span, _ in assertions]
@@ -354,11 +383,13 @@ def score_response(
     options: Sequence[str] | Mapping[str, str],
     answer: Any,
     finish_reason: str | None = None,
+    *,
+    parser_id: str = VERSION,
 ) -> dict[str, Any]:
     """Extract first, then compare with gold; gold never influences extraction."""
     kind = _question_type(question_type)
-    extracted = (extract_mcq(raw, options, finish_reason) if kind == "mcq"
-                 else extract_open(raw, finish_reason))
+    extracted = (extract_mcq(raw, options, finish_reason, parser_id=parser_id) if kind == "mcq"
+                 else extract_open(raw, finish_reason, parser_id=parser_id))
     parsed = extracted["answer"]
     correct = extracted["status"] == PARSED and (
         _mcq_correct(answer, parsed) if kind == "mcq" else _open_correct(answer, parsed)

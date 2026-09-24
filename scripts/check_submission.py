@@ -10,8 +10,11 @@ def inspect_blob(name, data, symlink=False):
     errors = []
     if symlink:
         errors.append(f"Public symlink is not allowed: {name}")
-    if any(part in {"local_sources", ".venv", "venv", "checkpoints", "artifacts", ".cache", ".serena", ".ssh"} for part in path.parts):
+    if any(part in {"local_sources", ".venv", "venv", "checkpoints", "artifacts", ".cache", ".serena", ".ssh",
+                   "docs", "claudedocs", "analysis_exports"} for part in path.parts):
         errors.append(f"Private directory: {name}")
+    if path.name == "AGENTS.md":
+        errors.append(f"Internal agent instructions: {name}")
     if path.name == ".env" or path.suffix.lower() in {".safetensors", ".parquet", ".arrow", ".pt", ".pth", ".bin", ".pdf", ".pem", ".key"}:
         errors.append(f"Private artifact type: {name}")
     if len(data) > 2 * 1024**2:

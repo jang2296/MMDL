@@ -95,7 +95,7 @@ def validate(run_dir, public_dir):
             inference_ids.add(iid)
             invocation_ids.add(vid)
         score = score_with_parser(row["raw_response"], row["question_type"], row["options"], row["answer"],
-                                  eval_config["parser"], row.get("finish_reason"))
+                                  eval_config["parser"], row.get("finish_reason"), question=row.get("question", ""))
         assert all(row[k] == v for k, v in score.items()), row["id"]
         correct += row["correct"]
     assert summary["correct"] == correct

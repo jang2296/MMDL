@@ -34,7 +34,7 @@ def arguments(argv=None):
     parser.add_argument("--suite", choices=["mmmu-val"], default="mmmu-val")
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--commit", required=True)
-    parser.add_argument("--protocol", type=Path, default=root / "configs/eval/mmmu_val_v1.yaml")
+    parser.add_argument("--protocol", type=Path, default=root / "configs/eval/mmmu_val_v8.yaml")
     parser.add_argument("--hardware", type=Path, default=root / "configs/hardware/rtx4090_24gb.yaml")
     parser.add_argument("--model-ref", type=Path, default=root / "manifests/models/baseline.json")
     parser.add_argument("--model-path", default=os.environ.get("MMDL_MODEL_PATH", "Qwen/Qwen3-VL-4B-Instruct"))

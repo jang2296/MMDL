@@ -1,0 +1,104 @@
+{
+  "parser": "team-final-answer-v8",
+  "scoring_sha256": "b80a28a4b66906d5c4f1ece046bd7c4be2b447445da4b072144e52ce7ee047fa",
+  "new_inference": false,
+  "semantic_error_free": false,
+  "validation_scope": "CPU replay, source integrity and development regression; no independent holdout",
+  "runs": {
+    "baseline_2048": {
+      "correct": 478,
+      "denominator": 900,
+      "accuracy": 0.5311111111111111,
+      "no_parse": 225,
+      "empty": 0,
+      "length_total": 226,
+      "length_correct": 5,
+      "v6_transitions": {
+        "1->1": 477,
+        "0->0": 420,
+        "0->1": 1,
+        "1->0": 2
+      },
+      "regression_counts": {
+        "V7_FALSE_NEGATIVE_CLEAR": 13,
+        "AMBIGUOUS_OR_TRUNCATED": 4,
+        "V7_GAIN_VALID": 1
+      },
+      "regression_correct": {
+        "V7_FALSE_NEGATIVE_CLEAR": 12,
+        "AMBIGUOUS_OR_TRUNCATED": 3,
+        "V7_GAIN_VALID": 1
+      },
+      "gold_independence_checked": 900,
+      "record_hashes_and_replay_verified": 900,
+      "all_non_scoring_fields_unchanged": true,
+      "source_predictions_sha256": "b3b477a7828679dc200542b99e966be7af3e4ff12c88116c86ef9152980743ee",
+      "v8_predictions_sha256": "dfd5490383947882d5b6d9996a04f140e8e86d4fb72c781c70ddf3a5aa3059f1"
+    },
+    "continuous_32k": {
+      "correct": 554,
+      "denominator": 900,
+      "accuracy": 0.6155555555555555,
+      "no_parse": 92,
+      "empty": 0,
+      "length_total": 75,
+      "length_correct": 1,
+      "v6_transitions": {
+        "1->1": 553,
+        "0->0": 341,
+        "1->0": 5,
+        "0->1": 1
+      },
+      "regression_counts": {
+        "AMBIGUOUS_OR_TRUNCATED": 2,
+        "V7_FALSE_NEGATIVE_CLEAR": 17,
+        "POLICY_DIFFERENCE": 1,
+        "V7_GAIN_VALID": 1
+      },
+      "regression_correct": {
+        "AMBIGUOUS_OR_TRUNCATED": 2,
+        "V7_FALSE_NEGATIVE_CLEAR": 12,
+        "POLICY_DIFFERENCE": 1,
+        "V7_GAIN_VALID": 1
+      },
+      "gold_independence_checked": 900,
+      "record_hashes_and_replay_verified": 900,
+      "all_non_scoring_fields_unchanged": true,
+      "source_predictions_sha256": "5f0c6915516e9b82f06a5971be23aa72e116726bc613df4da9dcd94520bfa73d",
+      "v8_predictions_sha256": "6831516fb3e4dcd6a9803d0fb478e66d4ccbd544b9a8c75a22add9594b26258d"
+    },
+    "official_b2": {
+      "correct": 558,
+      "denominator": 900,
+      "accuracy": 0.62,
+      "no_parse": 97,
+      "empty": 0,
+      "length_total": 90,
+      "length_correct": 5,
+      "v6_transitions": {
+        "1->1": 556,
+        "0->0": 338,
+        "1->0": 4,
+        "0->1": 2
+      },
+      "regression_counts": {
+        "AMBIGUOUS_OR_TRUNCATED": 6,
+        "V7_GAIN_VALID": 2,
+        "V7_FALSE_NEGATIVE_CLEAR": 16,
+        "POLICY_DIFFERENCE": 1
+      },
+      "regression_correct": {
+        "AMBIGUOUS_OR_TRUNCATED": 4,
+        "V7_GAIN_VALID": 2,
+        "V7_FALSE_NEGATIVE_CLEAR": 15,
+        "POLICY_DIFFERENCE": 1
+      },
+      "gold_independence_checked": 900,
+      "record_hashes_and_replay_verified": 900,
+      "all_non_scoring_fields_unchanged": true,
+      "source_predictions_sha256": "5dc87237edc66efac96bb58c2afbccdb023567c5e62644e388d48488144a2d42",
+      "v8_predictions_sha256": "d4d31bb18879a2b33739c5dc9b1a671bf43afeffc755a5241bb0945654741f0d"
+    }
+  },
+  "status": "CPU_REPLAY_VERIFIED"
+}

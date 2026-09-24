@@ -20,6 +20,8 @@ class ReproductionContractTests(unittest.TestCase):
         self.assertTrue(inspect("config.txt", ("ghp_" + "x" * 32).encode()))
         self.assertTrue(inspect("results/run/predictions.jsonl", b'{"raw_response":"fixture"}'))
         self.assertTrue(inspect(".serena/state.json", b"{}"))
+        for name in ("docs/internal.md", "claudedocs/audit.md", "AGENTS.md", "analysis_exports/run.json"):
+            self.assertTrue(inspect(name, b"internal"))
         self.assertTrue(inspect("model.safetensors", b"fixture"))
         self.assertFalse(inspect(".env.example", b'export HF_HOME="$HOME/cache"'))
 

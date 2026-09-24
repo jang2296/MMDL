@@ -75,10 +75,45 @@ class ReportBaselineTests(unittest.TestCase):
                     self.assertNotIn("30.00 GiB", value)
                     self.assertIn(f"`{role}`", value)
 
+    def test_rescore_overlay_keeps_original_runtime_and_requires_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scored = root / "scored"
+            (scored / "samples").mkdir(parents=True)
+            row = {"id": "one", "subject": "Art", "correct": True}
+            (scored / "samples/one.json").write_text(json.dumps(row))
+            (scored / "scorer_source.json").write_text(json.dumps(
+                {"parser": "team-final-answer-v8", "scoring_sha256": "fixture-hash"}))
+            (root / "Assignment_1.md").write_text(
+                "<!-- REPORT_DYNAMIC:BEGIN -->\nold\n<!-- REPORT_DYNAMIC:END -->\n"
+                "<!-- REPORT_RUNTIME:BEGIN -->\nold\n<!-- REPORT_RUNTIME:END -->\n"
+                "<!-- REPORT_STATUS:BEGIN -->\nold\n<!-- REPORT_STATUS:END -->\n")
+            summary = {"total_seconds_this_invocation": 12345}
+            with (patch.object(report_baseline, "ROOT", root),
+                  patch.object(report_baseline, "_load_complete_run", return_value=
+                               (summary, {}, {}, {}, {}, [], ["Art"])),
+                  patch.object(report_baseline, "_dynamic_results", return_value="new scores") as scores,
+                  patch.object(report_baseline, "_runtime_metrics", return_value="original runtime") as timing,
+                  patch.object(report_baseline, "_status_metrics", return_value="COMPLETE900"),
+                  patch("scripts.validate_rescore.validate") as audit):
+                report_baseline.render(root / "original", root / "report.md", scored)
+                audit.assert_called_once_with(root / "original", scored)
+                self.assertEqual(scores.call_args.args[0], [row])
+                self.assertIs(timing.call_args.args[0], summary)
+                text = (root / "report.md").read_text()
+                self.assertIn("fixture-hash", text)
+                self.assertIn("original runtime", text)
+                audit.side_effect = ValueError("Source mismatch")
+                with self.assertRaisesRegex(ValueError, "Source mismatch"):
+                    report_baseline.render(root / "original", root / "bad.md", scored)
+                self.assertFalse((root / "bad.md").exists())
+
     def test_final_report_rejects_old_or_non_vllm_protocol(self):
         valid = {"protocol_id": "mmmu-val-fast-vllm-32k-continuous-v1", "generation": {"max_new_tokens": 32768},
                  "execution": {"backend": "vllm", "batch_size": 2, "scheduling": "continuous"}}
         report_baseline._validate_final_protocol(valid)
+        for protocol in ("mmmu-val-official-vllm-b2-v2", "mmmu-val-v8"):
+            report_baseline._validate_final_protocol(valid | {"protocol_id": protocol})
         for key, value in (("protocol_id", "mmmu-val-fast-vllm-v1"),
                            ("protocol_id", "mmmu-val-fast-vllm-32k-v1"),
                            ("execution", {"backend": "vllm", "batch_size": 2})):

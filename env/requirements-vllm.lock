@@ -65,6 +65,8 @@ msgpack==1.2.2
 msgspec==0.21.1
 multidict==6.9.0
 multiprocess==0.70.16
+mypy==1.18.2
+mypy-extensions==1.1.0
 networkx==3.6.1
 ninja==1.13.2
 numba==0.61.2
@@ -90,6 +92,7 @@ outlines-core==0.2.11
 packaging==26.3
 pandas==3.0.6
 partial-json-parser==0.2.1.1.post7
+pathspec==1.1.1
 peft==0.17.1
 pillow==11.3.0
 prometheus-client==0.26.0
@@ -122,6 +125,7 @@ rich==15.0.0
 rich-toolkit==0.20.5
 rignore==0.8.1
 rpds-py==2026.6.3
+ruff==0.14.3
 safetensors==0.8.0
 scipy==1.18.1
 sentencepiece==0.2.2
@@ -145,6 +149,7 @@ transformers==4.57.1
 triton==3.4.0
 truststore==0.10.4
 typer==0.27.2
+types-PyYAML==6.0.12.20260906
 typing-extensions==4.16.0
 typing-inspection==0.4.4
 urllib3==2.8.0

@@ -36,7 +36,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 def _validate_final_protocol(cfg: dict[str, Any]) -> None:
     execution = cfg.get("execution", {})
-    if (cfg.get("protocol_id") != FINAL_PROTOCOL_ID
+    if (cfg.get("protocol_id") not in {FINAL_PROTOCOL_ID, "mmmu-val-official-vllm-b2-v2", "mmmu-val-v8"}
             or cfg.get("generation", {}).get("max_new_tokens") != 32768
             or execution.get("backend") != "vllm"
             or execution.get("batch_size") != 2
@@ -358,7 +358,7 @@ Run status: **COMPLETE900**. Independent audit: 900 unique completed rows, 30 su
 
 Hint policy: non-empty sanitized source `hint` is rendered as `Hint: {{hint}}\\n` before `Question`; absent or blank hints render nothing. The open-ended counterpart keeps that hint policy, emits `Question: {{question}}`, and omits options and the MCQ selection instruction. Gold answer/explanation fields are excluded from inference input.
 
-- **출처**: Qwen3-VL official `evaluation/mmmu/run_mmmu.py` `build_mmmu_prompt`, pinned in `docs/SOURCE_REVIEW.md`; repository templates are the hashed P0 protocol inputs.
+- **출처**: Qwen3-VL official `evaluation/mmmu/run_mmmu.py` `build_mmmu_prompt`, pinned in `third_party/README.md`; repository templates are the hashed P0 protocol inputs.
 - **선택 이유**: official MMMU option order and instruction are retained; image content is supplied before one final text content item.
 
 ## 3. 생성(Decoding) 설정
@@ -487,7 +487,7 @@ def _status_metrics(summary: dict[str, Any], manifest: dict[str, Any], run_dir: 
         f"- **제출 상태**: `COMPLETE900` 독립 검증 완료; job `{job_id}`, run `{run_dir.name}`, "
         f"900/900 completed, denominator `{summary.get('denominator')}`.\n"
         f"- **원본 실행 표식**: `{role}` (기존 기록 보존; 점수·실패 분석은 같은 응답을 사용).\n"
-        f"- **재현 명령**: `{command}`\n"
+        f"- **원본 GPU 추론 명령**: `{command}`\n"
     )
 
 
@@ -534,9 +534,21 @@ def _dynamic_results(rows: list[dict[str, Any]], subjects: list[str], cfg: dict[
 '''
 
 
-def render(run_dir: Path, output: Path) -> None:
+def render(run_dir: Path, output: Path, scored_dir: Path | None = None) -> None:
     """Replace only the marked metrics in the authored Korean submission report."""
     summary, environment, backend, manifest, cfg, rows, subjects = _load_complete_run(run_dir)
+    scoring_note = ""
+    if scored_dir is not None:
+        from scripts.validate_rescore import validate
+        validate(run_dir, scored_dir)
+        rows = [_read_json(path) for path in sorted((scored_dir / "samples").glob("*.json"))]
+        scoring = _read_json(scored_dir / "scorer_source.json")
+        scoring_note = (
+            f"- **사후 CPU 채점**: `{scoring['parser']}`, scorer SHA256 `{scoring['scoring_sha256']}`. "
+            "원본 GPU 응답/입력/종료 사유를 보존하여 재채점했으며 아래 시간·메모리는 원본 추론 실측이다.\n"
+            "- **재채점 원장**: 별도 보존된 `source.json`, `scorer_source.json`, `samples/`, `predictions.jsonl`; "
+            "새 GPU 추론이 아니며 원래 inference protocol을 소급 변경하지 않았다.\n"
+        )
     template = (ROOT / "Assignment_1.md").read_text(encoding="utf-8")
     report, count = _DYNAMIC.subn(
         lambda match: match.group(1) + _dynamic_results(rows, subjects, cfg) + match.group(3), template
@@ -549,7 +561,7 @@ def render(run_dir: Path, output: Path) -> None:
     if count != 1:
         raise ValueError("Assignment_1.md must contain exactly one runtime report marker")
     report, count = _STATUS.subn(
-        lambda match: match.group(1) + _status_metrics(summary, manifest, run_dir) + match.group(3), report
+        lambda match: match.group(1) + _status_metrics(summary, manifest, run_dir) + scoring_note + match.group(3), report
     )
     if count != 1:
         raise ValueError("Assignment_1.md must contain exactly one status report marker")
@@ -566,19 +578,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--scored-dir", type=Path, help="verified CPU rescore overlay; preserve original inference metrics")
     parser.add_argument("--sync-template", action="store_true",
                         help="copy the authored pre-run template to the required report mirror")
     args = parser.parse_args()
     if args.sync_template:
-        if args.run_dir or args.output:
-            parser.error("--sync-template does not accept --run-dir or --output")
+        if args.run_dir or args.output or args.scored_dir:
+            parser.error("--sync-template does not accept --run-dir, --output or --scored-dir")
         _sync_submission_mirror((ROOT / "Assignment_1.md").read_text(encoding="utf-8"))
         print("Synchronized Assignment_1.md and reports/mmmu_baseline.md")
         return
     if args.run_dir is None or args.output is None:
         parser.error("--run-dir and --output are required unless --sync-template is used")
     output = args.output.expanduser().resolve()
-    render(args.run_dir.expanduser().resolve(), output)
+    render(args.run_dir.expanduser().resolve(), output,
+           args.scored_dir.expanduser().resolve() if args.scored_dir else None)
     report = output.read_text(encoding="utf-8")
     _sync_submission_mirror(report)
     print(f"Wrote {args.output}")

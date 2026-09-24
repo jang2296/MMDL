@@ -1,7 +1,0 @@
-{
-  "sources": [
-    {"id": "S1", "filename": "assignment_guidance.md", "sha256": "1c5f0032534bc8edff40444e54afd980b7a1991f4d6cd91d57037920419867c0", "local_only": true},
-    {"id": "S2", "filename": "SUBMISSION_TEMPLATE.md", "sha256": "3ae7b5c526ebb5143c4f40addb5cf0d3e35aa6e9186d28cfe6a8d17625169d8b", "local_only": true}
-  ],
-  "note": "Original Markdown files were present at repository root and moved without modification to ignored local_sources. Lecture PDF originals were not present."
-}

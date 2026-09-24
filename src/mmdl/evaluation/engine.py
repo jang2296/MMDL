@@ -159,11 +159,13 @@ def run(args, cfg, hw, root):
                                  [root / "src/mmdl/evaluation/prompt.py",
                                   root / "src/mmdl/evaluation/parsers.py",
                                   root / "third_party/mmmu/eval_utils.py"])
-    if cfg["parser"] == "team-final-answer-v4":
+    if cfg["parser"] in {"team-final-answer-v4", "team-final-answer-v8"}:
         protocol_files += file_records(root, [
             root / "src/mmdl/evaluation/final_answer_parser.py",
             root / "src/mmdl/evaluation/backends/input_preparation.py",
         ])
+    if cfg["parser"] == "team-final-answer-v8":
+        protocol_files += file_records(root, [root / "src/mmdl/evaluation/final_answer_parser_v8.py"])
     data_manifest = read_json(args.data_root / "manifest.json")
     processor_files = [item for item in base_manifest["files"] if not item["path"].endswith(".safetensors")]
     protocol_hash = digest(dict(config=cfg, files=protocol_files, processor=processor_files,
@@ -302,7 +304,7 @@ def run(args, cfg, hw, root):
                     sid = record["id"]
                     score = score_with_parser(output["raw_response"], record["question_type"],
                                               record["options"], record["answer"], cfg["parser"],
-                                              output.get("finish_reason"))
+                                              output.get("finish_reason"), question=record["question"])
                     raw = output["raw_response"]
                     just_answer = bool(re.fullmatch(
                         r"\s*(?:(?:the\s+)?(?:correct\s+|final\s+)?answer\s*(?:is|:)\s*)?"

@@ -47,6 +47,17 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             placement_kwargs(hw, 2 * 1024**3, 10 * 1024**3)
 
+    def test_v8_only_changes_scoring_not_b2_inference(self):
+        v8, hw = load_configs(ROOT / "configs/eval/mmmu_val_v8.yaml",
+                              ROOT / "configs/hardware/rtx3090_24gb.yaml")
+        b2, _ = load_configs(ROOT / "configs/eval/mmmu_val_official_vllm_b2_v2.yaml",
+                             ROOT / "configs/hardware/rtx3090_24gb.yaml")
+        self.assertEqual(v8["parser"], "team-final-answer-v8")
+        self.assertEqual(v8 | {"parser": b2["parser"], "protocol_id": b2["protocol_id"]}, b2)
+        for key, value in (("parser", "team-final-answer-v6"), ("parser", "team-final-answer-v7")):
+            with self.assertRaises(ValueError):
+                validate_configs(v8 | {key: value}, hw)
+
     def test_control_protocols_freeze_sampling_scoring_and_image_paths(self):
         configs = []
         for arm in ("a", "b", "c"):

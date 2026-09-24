@@ -96,7 +96,9 @@ class ReproduceTests(unittest.TestCase):
         self.assertFalse(any("evaluation" in step or "smoke" in step for step in result["steps"]))
 
     def test_only_one_evaluation_suite_is_accepted(self):
-        self.assertEqual(arguments(["--job-id", "fixture", "--commit", "a" * 40]).suite, "mmmu-val")
+        args = arguments(["--job-id", "fixture", "--commit", "a" * 40])
+        self.assertEqual(args.suite, "mmmu-val")
+        self.assertEqual(args.protocol.name, "mmmu_val_v8.yaml")
         for suite in ("mmmu-val-two-runs", "mmmu-val-analysis", "mmmu-val-assignment"):
             with self.subTest(suite=suite), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
@@ -197,6 +199,7 @@ class ReproduceTests(unittest.TestCase):
             root = Path(temp)
             (root / "env").mkdir()
             (root / "env/requirements-eval.lock").write_text("fixture\n")
+            (root / "env/requirements-vllm.lock").write_text("fixture\n")
             paths = {name: root / name.lower() for name in (
                 "MMDL_VOLUME_ROOT", "HF_HOME", "MMDL_DATA_ROOT",
                 "MMDL_ARTIFACT_ROOT", "MMDL_VENV_ROOT",
