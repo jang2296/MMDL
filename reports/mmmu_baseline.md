@@ -62,7 +62,7 @@ python -m scripts.validate_rescore \
   --source-run "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" --scored-dir "$NEW_RESCORE_DIR"
 python -m scripts.report_baseline \
   --run-dir "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" \
-  --scored-dir "$NEW_RESCORE_DIR" --output Assignment_1.md
+  --scored-dir "$NEW_RESCORE_DIR" --output reports/mmmu_baseline.md
 ```
 
 기존 FROZEN GPU protocol의 parser를 사후에 바꾸지 않았다. V8 실행 소스 snapshot과 hash는
@@ -273,5 +273,6 @@ LLM·무작위 fallback·모델 재생성·gold 맞춤 예외는 없다. 합성3
   R1↔R2는 backend/길이, R2↔B2는 전처리/해상도/context/호스트 등이 달라 해상도의 인과효과로 단정하지 않는다.
 - 재채점 원장·V8 HTML·원본 응답은 별도 보존했다. 공개 저장소에는 작은 확정 집계/hash와
   새 실행·재채점에 필요한 코드만 포함한다. 기존 원장 전체의 배포/접근은 별도이며 Git clone만으로 복원되지 않는다.
-- 제출 정본은 `Assignment_1.md`; `reports/mmmu_baseline.md`는 동일 본문,
-  `assignment/assignment1.md`는 본문 링크다. 실행·설치 방법은 `README.md`로 모았다.
+- 제출 정본은 수업 지정 경로인 `reports/mmmu_baseline.md` 하나이며, 제공된
+  `SUBMISSION_TEMPLATE.md`의8개 항목을 따른다. `assignment/assignment1.md`는 본문 링크만 유지한다.
+  실행·설치 방법은 저장소 루트의 [README.md](../README.md)에 있다.

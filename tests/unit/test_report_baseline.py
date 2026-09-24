@@ -84,7 +84,8 @@ class ReportBaselineTests(unittest.TestCase):
             (scored / "samples/one.json").write_text(json.dumps(row))
             (scored / "scorer_source.json").write_text(json.dumps(
                 {"parser": "team-final-answer-v8", "scoring_sha256": "fixture-hash"}))
-            (root / "Assignment_1.md").write_text(
+            (root / "reports").mkdir()
+            (root / "reports/mmmu_baseline.md").write_text(
                 "<!-- REPORT_DYNAMIC:BEGIN -->\nold\n<!-- REPORT_DYNAMIC:END -->\n"
                 "<!-- REPORT_RUNTIME:BEGIN -->\nold\n<!-- REPORT_RUNTIME:END -->\n"
                 "<!-- REPORT_STATUS:BEGIN -->\nold\n<!-- REPORT_STATUS:END -->\n")
@@ -137,7 +138,8 @@ class ReportBaselineTests(unittest.TestCase):
                 "<!-- REPORT_DYNAMIC:BEGIN -->\nold\n<!-- REPORT_DYNAMIC:END -->\n\n"
                 "## 8. Authored limit stays\n"
             )
-            (root / "Assignment_1.md").write_text(template, encoding="utf-8")
+            (root / "reports").mkdir()
+            (root / "reports/mmmu_baseline.md").write_text(template, encoding="utf-8")
             output = root / "out.md"
             with patch.object(report_baseline, "ROOT", root), \
                  patch.object(report_baseline, "_load_complete_run", return_value=({}, {}, {}, {}, cfg, rows, list(SUBJECTS))):
@@ -164,6 +166,32 @@ class ReportBaselineTests(unittest.TestCase):
         self.assertEqual(dynamic.count("| 30 | Sociology | 30 | 0.00% |"), 1)
         self.assertIn("NO_PARSE 900개", dynamic)
         self.assertLess(len(dynamic.split("## 7. 격차 분석\n\n", 1)[1]), 1000)
+
+    def test_cli_writes_only_canonical_report_or_explicit_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canonical = root / "reports/mmmu_baseline.md"
+            canonical.parent.mkdir()
+            canonical.write_text("authored report")
+
+            def write_report(run_dir, output, scored_dir):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("verified report")
+
+            with patch.object(report_baseline, "ROOT", root), \
+                    patch.object(report_baseline, "render", side_effect=write_report) as render:
+                with patch("sys.argv", ["report_baseline", "--run-dir", str(root / "run")]):
+                    report_baseline.main()
+                render.assert_called_once_with(root / "run", canonical, None)
+                self.assertEqual(canonical.read_text(), "verified report")
+                canonical.write_text("keep canonical")
+                alternate = root / "alternate.md"
+                with patch("sys.argv", ["report_baseline", "--run-dir", str(root / "run"),
+                                        "--output", str(alternate)]):
+                    report_baseline.main()
+                self.assertEqual(alternate.read_text(), "verified report")
+                self.assertEqual(canonical.read_text(), "keep canonical")
+            self.assertFalse((root / "Assignment_1.md").exists())
 
 
 if __name__ == "__main__":

@@ -549,52 +549,35 @@ def render(run_dir: Path, output: Path, scored_dir: Path | None = None) -> None:
             "- **재채점 원장**: 별도 보존된 `source.json`, `scorer_source.json`, `samples/`, `predictions.jsonl`; "
             "새 GPU 추론이 아니며 원래 inference protocol을 소급 변경하지 않았다.\n"
         )
-    template = (ROOT / "Assignment_1.md").read_text(encoding="utf-8")
+    template = (ROOT / "reports/mmmu_baseline.md").read_text(encoding="utf-8")
     report, count = _DYNAMIC.subn(
         lambda match: match.group(1) + _dynamic_results(rows, subjects, cfg) + match.group(3), template
     )
     if count != 1:
-        raise ValueError("Assignment_1.md must contain exactly one dynamic report marker")
+        raise ValueError("reports/mmmu_baseline.md must contain exactly one dynamic report marker")
     report, count = _RUNTIME.subn(
         lambda match: match.group(1) + _runtime_metrics(summary, environment, backend, manifest, cfg, run_dir) + match.group(3), report
     )
     if count != 1:
-        raise ValueError("Assignment_1.md must contain exactly one runtime report marker")
+        raise ValueError("reports/mmmu_baseline.md must contain exactly one runtime report marker")
     report, count = _STATUS.subn(
         lambda match: match.group(1) + _status_metrics(summary, manifest, run_dir) + scoring_note + match.group(3), report
     )
     if count != 1:
-        raise ValueError("Assignment_1.md must contain exactly one status report marker")
+        raise ValueError("reports/mmmu_baseline.md must contain exactly one status report marker")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(report, encoding="utf-8")
 
 
-def _sync_submission_mirror(report: str) -> None:
-    for path in (ROOT / "Assignment_1.md", ROOT / "reports/mmmu_baseline.md"):
-        path.write_text(report, encoding="utf-8")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-dir", type=Path)
-    parser.add_argument("--output", type=Path)
+    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--output", type=Path, default=ROOT / "reports/mmmu_baseline.md")
     parser.add_argument("--scored-dir", type=Path, help="verified CPU rescore overlay; preserve original inference metrics")
-    parser.add_argument("--sync-template", action="store_true",
-                        help="copy the authored pre-run template to the required report mirror")
     args = parser.parse_args()
-    if args.sync_template:
-        if args.run_dir or args.output or args.scored_dir:
-            parser.error("--sync-template does not accept --run-dir, --output or --scored-dir")
-        _sync_submission_mirror((ROOT / "Assignment_1.md").read_text(encoding="utf-8"))
-        print("Synchronized Assignment_1.md and reports/mmmu_baseline.md")
-        return
-    if args.run_dir is None or args.output is None:
-        parser.error("--run-dir and --output are required unless --sync-template is used")
     output = args.output.expanduser().resolve()
     render(args.run_dir.expanduser().resolve(), output,
            args.scored_dir.expanduser().resolve() if args.scored_dir else None)
-    report = output.read_text(encoding="utf-8")
-    _sync_submission_mirror(report)
     print(f"Wrote {args.output}")
 
 

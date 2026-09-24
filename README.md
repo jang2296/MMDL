@@ -4,8 +4,9 @@ Qwen3-VL-4B-Instruct의 MMMU validation **900문항 평가 파이프라인**입�
 현재 기준은 `team-final-answer-v8`입니다. 공식 점수에 맞춰 답을 고르지 않으며,
 이후 학습 모델도 같은 프롬프트·생성·이미지·채점 조건으로 비교합니다.
 
-- **보고서:** [Assignment_1.md](Assignment_1.md)
-- **수업 지정 경로:** [reports/mmmu_baseline.md](reports/mmmu_baseline.md), [assignment/assignment1.md](assignment/assignment1.md)
+- **Assignment #1 보고서:** [reports/mmmu_baseline.md](reports/mmmu_baseline.md)
+- **제출 형식·기한:** 제공된 `SUBMISSION_TEMPLATE.md`의8개 항목, 2026-09-28 23:59(과제 안내 기준)
+- **강의 PDF의 안내 경로:** [assignment/assignment1.md](assignment/assignment1.md) → 위 보고서 링크
 - **확정 결과:** [점수·검증 요약](results/scoring-v8-20260924/summary.json), [30과목 × 세 실행 표](results/scoring-v8-20260924/subject_scores.csv)
 
 | 저장된 추론 실행 | V8 CPU 재채점 |
@@ -23,6 +24,16 @@ V8의 새 GPU 실행·실제 RTX4090 검증·학습은 아직 하지 않았습�
 Linux/WSL, Python3.12, NVIDIA CUDA 사용 가능 환경이 필요합니다.
 권장 경로는 RTX4090/3090 24GB의 vLLM·BF16·동시2 연속 처리입니다.
 가중치·MMMU 원문·이미지·대형 응답은 Git 저장소 밖에 저장합니다.
+다음 명령들은 저장소 루트에서 실행합니다. 처음 받는 경우:
+
+```bash
+git clone --branch feat/mmmu-baseline https://github.com/jang2296/MMDL.git
+cd MMDL
+git rev-parse HEAD
+```
+
+정확한 제출 버전을 재현할 때는 제출 기록의 전체 commit SHA로 `git checkout <commit-sha>`한 뒤
+진행합니다. 이후 환경을 설치합니다.
 
 ```bash
 python3.12 -m venv "$HOME/mmdl-env"
@@ -69,6 +80,10 @@ bash scripts/eval.sh --protocol configs/eval/mmmu_val_v8.yaml --hardware configs
 context40960을 고정합니다. 다른 YAML은 기존 실행 재현·회귀 검사에 필요한 버전이며
 현재 제출용 진입점은 **mmmu_val_v8.yaml 하나**입니다.
 
+위 명령은 환경 설치 후 모델·데이터 준비 → 900문항 추론 → V8 채점 → 결과 저장을 수행합니다.
+`scripts/reproduce.sh`는 별도의 RunPod 운영용 wrapper이며, persistent volume·예산/종료 정책
+등 추가 환경 설정을 검사하는 경로입니다. 위 직접 평가 명령에는 그 운영용 설정이 필요하지 않습니다.
+
 학습 후에는 `--model-ref`와 `--model-path`를 해당 checkpoint manifest/path로 바꿉니다.
 `full/merged/adapter`의 base revision·학습 설정·데이터 hash·artifact 출처를 요구합니다.
 실제 학습 코드/학습 결과는 아직 완료되지 않았으며, 빈 학습 구현을 제출하지 않습니다.
@@ -84,11 +99,12 @@ context40960을 고정합니다. 다른 YAML은 기존 실행 재현·회귀 검
 export NEW_RESCORE_DIR="$MMDL_ARTIFACT_ROOT/rescores/${MMDL_JOB_ID}-v8"
 bash scripts/rescore.sh --artifact-root "$MMDL_ARTIFACT_ROOT" --run-id "${MMDL_JOB_ID}-evaluation" --parser team-final-answer-v8 --output-dir "$NEW_RESCORE_DIR"
 python -m scripts.validate_rescore --source-run "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" --scored-dir "$NEW_RESCORE_DIR"
-python -m scripts.report_baseline --run-dir "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" --scored-dir "$NEW_RESCORE_DIR" --output Assignment_1.md
+python -m scripts.report_baseline --run-dir "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" --scored-dir "$NEW_RESCORE_DIR" --output reports/mmmu_baseline.md
 ```
 
 재채점은 GPU/LLM 없이 수행하며 기존 결과 폴더를 덮어쓰지 않습니다.
-보고서 생성은 원본 GPU 실측과 새 CPU 점수를 분리하고 두 제출 경로를 동기화합니다.
+보고서 생성은 원본 GPU 실측과 새 CPU 점수를 분리하여 `reports/mmmu_baseline.md`만 갱신합니다.
+보고서는 제공된 `SUBMISSION_TEMPLATE.md`의8개 항목을 따라 작성했으며, 루트에 중복 본문을 만들지 않습니다.
 원본 응답을 배포하지 않아도 위 평가 명령으로 데이터를 정식 취득해 새 실행할 수 있습니다.
 기존 응답의 완전 동일 재채점에는 별도 보존 원장이 필요하며 이 저장소에 포함되지 않습니다.
 
