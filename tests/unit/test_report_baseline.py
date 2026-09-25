@@ -73,7 +73,7 @@ class ReportBaselineTests(unittest.TestCase):
                     value = report_baseline._sampled_device_memory(root / f"runs/job-{role}", manifest, "vllm")
                     self.assertIn("20.00 GiB", value)
                     self.assertNotIn("30.00 GiB", value)
-                    self.assertIn(f"`{role}`", value)
+                    self.assertIn("500 ms 간격", value)
 
     def test_rescore_overlay_keeps_original_runtime_and_requires_validation(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -102,7 +102,9 @@ class ReportBaselineTests(unittest.TestCase):
                 self.assertEqual(scores.call_args.args[0], [row])
                 self.assertIs(timing.call_args.args[0], summary)
                 text = (root / "report.md").read_text()
-                self.assertIn("fixture-hash", text)
+                self.assertIn("§4의 최종 채점 규칙", text)
+                self.assertNotIn("COMPLETE900", text)
+                self.assertNotIn("fixture-hash", text)
                 self.assertIn("original runtime", text)
                 audit.side_effect = ValueError("Source mismatch")
                 with self.assertRaisesRegex(ValueError, "Source mismatch"):
@@ -164,8 +166,52 @@ class ReportBaselineTests(unittest.TestCase):
             rows, list(SUBJECTS), {"execution": {"backend": "vllm"}, "generation": {"max_new_tokens": 2048}}
         )
         self.assertEqual(dynamic.count("| 30 | Sociology | 30 | 0.00% |"), 1)
-        self.assertIn("NO_PARSE 900개", dynamic)
+        self.assertIn("NO_PARSE는 900개", dynamic)
+        self.assertIn("겹침은 900개", dynamic)
         self.assertLess(len(dynamic.split("## 7. 격차 분석\n\n", 1)[1]), 1000)
+
+    def test_runtime_metrics_are_only_table_rows_and_fall_back_to_summary_snapshot(self):
+        runtime = report_baseline._runtime_metrics(
+            {"max_observed_device_memory_used_bytes": 22.87 * 1024**3},
+            {"python": "3.12.3", "packages": {"vllm": "0.11"}},
+            {"vllm": {"version": "0.11"}},
+            {"identity": {}},
+            {"execution": {"backend": "vllm", "batch_size": 2}},
+            Path("/not-a-run"),
+        )
+        self.assertTrue(all(line.startswith("|") for line in runtime.splitlines() if line))
+        self.assertIn("22.87 GiB", runtime)
+        self.assertIn("snapshot 최대치", runtime)
+        self.assertIn("Python 3.12.3", runtime)
+        self.assertIn("../env/requirements-vllm.lock", runtime)
+        self.assertNotIn("###", runtime)
+
+    def test_authored_v8_guard_rejects_mismatched_static_settings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "configs/eval/mmmu_val_v8.yaml"
+            config.parent.mkdir(parents=True)
+            expected = {
+                "prompt_policy": "P0",
+                "parser": "team-final-answer-v8",
+                "generation": {"max_new_tokens": 32768},
+                "image": {"min_pixels": 1003520},
+            }
+            config.write_text(json.dumps(expected))
+            with patch.object(report_baseline, "ROOT", root):
+                report_baseline._validate_authored_v8_config(expected, None)
+                with self.assertRaisesRegex(ValueError, "generation"):
+                    report_baseline._validate_authored_v8_config(
+                        expected | {"generation": {"max_new_tokens": 2048}}, None
+                    )
+                with self.assertRaisesRegex(ValueError, "scoring"):
+                    report_baseline._validate_authored_v8_config(
+                        expected, {"parser": "team-final-answer-v6"}
+                    )
+                with self.assertRaisesRegex(ValueError, "execution"):
+                    report_baseline._validate_authored_v8_config(
+                        expected | {"execution": {"batch_size": 1}}, None
+                    )
 
     def test_cli_writes_only_canonical_report_or_explicit_output(self):
         with tempfile.TemporaryDirectory() as temporary:

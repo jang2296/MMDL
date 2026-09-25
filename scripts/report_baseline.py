@@ -454,41 +454,70 @@ def _sampled_device_memory(run_dir: Path, manifest: dict[str, Any], backend_name
         return "미측정: 이 평가의 900-run device memory sampling record가 없음"
     stage = next(stage for stage in matches if stage.get("peak_observed_device_memory_used_bytes") == max(values))
     interval = stage.get("gpu_memory_sample_interval_ms", "미제공")
-    samples = stage.get("gpu_memory_sample_count", stage.get("sample_count", "미제공"))
-    scope = stage.get("memory_scope", "미제공")
     return (
-        f"{_bytes_gib(max(values))}; source=job stage `{stage.get('stage', '미제공')}`, "
-        f"{interval} ms 간격 {samples}회, scope=`{scope}`. CUDA/vLLM allocator peak가 아니라 "
-        "해당 single-GPU device의 sampled used-memory 관측 최대치이며 driver/other process overhead를 포함할 수 있다."
+        f"장치 전체 사용량의 관측 최대 {_bytes_gib(max(values))} ({interval} ms 간격). "
+        "vLLM allocator의 정확한 peak는 미측정; driver·다른 프로세스 사용량이 포함될 수 있음"
     )
 
 
 def _runtime_metrics(summary: dict[str, Any], environment: dict[str, Any], backend: dict[str, Any],
                      manifest: dict[str, Any], cfg: dict[str, Any], run_dir: Path) -> str:
-    execution = cfg["execution"]
-    backend_name = execution["backend"]
-    version = backend.get("vllm", {}).get("version", "미제공") if backend_name == "vllm" else environment.get("packages", {}).get("transformers", "미제공")
-    return (
-        "### COMPLETE900 실행 실측\n\n"
-        f"- backend: `{backend_name}` `{version}`, batch `{execution['batch_size']}`; GPU: {_gpu_text(environment)}\n"
-        f"- effective generation record: `{backend.get('generation_config', '미제공')}`\n"
-        f"- evaluation loop: {_seconds(summary.get('evaluation_seconds_this_invocation'))}; "
-        f"model load: {_seconds(summary.get('model_load_seconds'))}; total invocation: {_seconds(summary.get('total_seconds_this_invocation'))}\n"
-        f"- GPU memory: {_sampled_device_memory(run_dir, manifest, backend_name)}\n"
+    """Return the complete authored section-1 Markdown table."""
+    model = cfg.get("model", {})
+    dataset = cfg.get("dataset", {})
+    execution = cfg.get("execution", {})
+    backend_name = execution.get("backend", "미제공")
+    version = (backend.get("vllm", {}).get("version", "미제공") if backend_name == "vllm"
+               else environment.get("packages", {}).get("transformers", "미제공"))
+    device_memory = _sampled_device_memory(run_dir, manifest, backend_name)
+    if device_memory.startswith("미측정"):
+        observed = summary.get("max_observed_device_memory_used_bytes")
+        if isinstance(observed, (int, float)):
+            device_memory = (
+                f"{_bytes_gib(observed)}; summary의 observed device-memory snapshot 최대치 "
+                "(allocator peak가 아님)"
+            )
+    timing = (
+        f"평가 {_seconds(summary.get('evaluation_seconds_this_invocation'))}; "
+        f"모델 로드 {_seconds(summary.get('model_load_seconds'))}; "
+        f"전체 호출 {_seconds(summary.get('total_seconds_this_invocation'))}"
     )
+    packages = environment.get("packages", {})
+    lock = "requirements-vllm.lock" if backend_name == "vllm" else "requirements-eval.lock"
+    return (
+        "| 항목 | 값 |\n"
+        "|---|---|\n"
+        f"| 모델 checkpoint | `{model.get('id', '미제공')}`, revision `{model.get('revision', '미제공')}` |\n"
+        f"| 모델 정밀도 | `{model.get('dtype', '미제공')}`, 비양자화. Processor·Tokenizer도 모델과 동일 revision |\n"
+        f"| 평가 데이터 | `{dataset.get('id', '미제공')}`, revision `{dataset.get('revision', '미제공')}`, `{dataset.get('split', '미제공')}` {dataset.get('expected_total', '미제공')}문항 |\n"
+        f"| 추론 백엔드 | `{backend_name}` `{version}`, 최대 {execution.get('batch_size', '미제공')}개 요청의 연속 배치 |\n"
+        f"| 사용 GPU | {_gpu_text(environment)} |\n"
+        f"| 실측 peak VRAM | {device_memory} |\n"
+        f"| 총 소요 시간 | {timing} (설치·다운로드 제외) |\n"
+        f"| 주요 환경 | {environment.get('platform', {}).get('system', '미제공')}, Python {environment.get('python', '미제공')}, PyTorch {packages.get('torch', '미제공')}, Transformers {packages.get('transformers', '미제공')} |\n"
+        f"| 의존성 | [env/{lock}](../env/{lock}) |\n"
+    )
+
+
+def _validate_authored_v8_config(cfg: dict[str, Any], scoring: dict[str, Any] | None) -> None:
+    """Reject a run that would make the authored v8 static sections inaccurate."""
+    v8_path = ROOT / "configs/eval/mmmu_val_v8.yaml"
+    if not v8_path.is_file():
+        return
+    v8 = _read_yaml(v8_path)
+    for section in ("model", "dataset", "generation", "image", "execution"):
+        if cfg.get(section) != v8.get(section):
+            raise ValueError(f"Authored v8 report requires matching resolved {section} settings")
+    if cfg.get("prompt_policy") != v8.get("prompt_policy"):
+        raise ValueError("Authored v8 report requires the P0 prompt policy")
+    parser = (scoring or cfg).get("parser")
+    if parser != v8.get("parser"):
+        raise ValueError("Authored v8 report requires team-final-answer-v8 scoring")
 
 
 def _status_metrics(summary: dict[str, Any], manifest: dict[str, Any], run_dir: Path) -> str:
-    identity = manifest.get("identity", {})
-    job_id = identity.get("job_id", "미제공") if isinstance(identity, dict) else "미제공"
-    role = identity.get("run_role", "미제공") if isinstance(identity, dict) else "미제공"
-    command = _command(run_dir, manifest)
-    return (
-        f"- **제출 상태**: `COMPLETE900` 독립 검증 완료; job `{job_id}`, run `{run_dir.name}`, "
-        f"900/900 completed, denominator `{summary.get('denominator')}`.\n"
-        f"- **원본 실행 표식**: `{role}` (기존 기록 보존; 점수·실패 분석은 같은 응답을 사용).\n"
-        f"- **원본 GPU 추론 명령**: `{command}`\n"
-    )
+    del summary, manifest, run_dir
+    return "- 보고한 점수와 시간·메모리는 검증된 동일 실행의 기록이다.\n"
 
 
 def _dynamic_results(rows: list[dict[str, Any]], subjects: list[str], cfg: dict[str, Any]) -> str:
@@ -500,14 +529,18 @@ def _dynamic_results(rows: list[dict[str, Any]], subjects: list[str], cfg: dict[
         for index, subject in enumerate(subjects, 1)
     )
     no_parse = sum(row.get("parse_status") == "NO_PARSE" for row in rows)
-    empty = sum(row.get("parse_status") == "EMPTY" for row in rows)
     length = sum(row.get("finish_reason") == "length" for row in rows)
-    backend = cfg["execution"]["backend"]
+    overlap = sum(row.get("parse_status") == "NO_PARSE" and row.get("finish_reason") == "length"
+                  for row in rows)
     diagnosis = (
-        f"관측값: NO_PARSE {no_parse}개, EMPTY {empty}개, length 종료 {length}개이며, "
-        f"이 run의 backend는 {backend}, max_new_tokens는 {cfg['generation']['max_new_tokens']}이다. "
-        "이 값들은 공식 67.4와의 차이를 설명할 후보 관측치일 뿐 인과를 증명하지 않는다. "
-        "프롬프트/processor/revision/seed 정책, 생성 길이, parser와 runtime의 차이는 저장된 resolved config·raw response로만 검토한다."
+        "Qwen 공개 평가 코드는 규칙으로 답을 추출하지 못하면 LLM 판정을 사용할 수 있지만, "
+        "우리는 고정된 규칙만 사용한다. 따라서 자유로운 표현이나 답변 내 충돌을 처리하는 기준이 다르다. "
+        "[공식 채점 방식](https://github.com/QwenLM/Qwen3-VL/blob/96588727e44c78b25ba03ea03b8e12f7e64fd0da/evaluation/mmmu/README.md#custom-evaluation-logic)\n\n"
+        f"저장 응답에서 NO_PARSE는 {no_parse}개, 출력 상한 종료는 {length}개이고 두 조건의 겹침은 {overlap}개다. "
+        "따라서 독립적인 손실로 합산할 수 없다. 문항 ID별 seed 정책과 추론 환경도 공식 실행과 동일하지 않다. "
+        "이미지 입력을 확대했어도 추론 오류나 반복 생성이 해결된다는 보장은 없다. "
+        "공식 실행의 문항별 원본 응답을 확보하지 못했으므로 각 요인의 점수 기여도는 확정하지 않는다. "
+        "추출 실패를 모두 모델 오답이나 모두 파서 오류로 해석하지 않는다."
     )
     if len(diagnosis) > 1000:
         raise AssertionError("Gap diagnosis exceeded 1000 characters")
@@ -518,15 +551,16 @@ def _dynamic_results(rows: list[dict[str, Any]], subjects: list[str], cfg: dict[
 {table}
 |  | **Overall (macro avg)** | **900** | **{_percent(accuracy)}** |
 
-계산식: `mean(30개 과목 accuracy) = correct/900 = {correct}/900`.
+계산식: `Overall = mean(30개 과목 accuracy) = {correct}/900 × 100 = {accuracy * 100:.2f}%`.
+종합 점수는 반올림 전 과목별 정확도로 계산했다. 전체 900문항을 평가했으며 누락·시스템 오류는 없다.
 
 ## 6. 공식 수치와의 비교
 
-| | Overall (MMMU validation) |
+| | Overall (MMMU val) |
 |---|---:|
-| 수업이 제시한 공식 비교값 | 67.4 |
-| 우리 재현 결과 | {accuracy * 100:.2f} |
-| 차이 (Δ, percentage points) | {accuracy * 100 - OFFICIAL_SCORE:+.2f} |
+| 공식 — 과제에서 제시한 Qwen3-VL Technical Report 수치 | 67.4% |
+| 우리 재현 결과 | {accuracy * 100:.2f}% |
+| 차이 (우리 − 공식) | **{accuracy * 100 - OFFICIAL_SCORE:+.2f}%p** |
 
 ## 7. 격차 분석
 
@@ -538,17 +572,17 @@ def render(run_dir: Path, output: Path, scored_dir: Path | None = None) -> None:
     """Replace only the marked metrics in the authored Korean submission report."""
     summary, environment, backend, manifest, cfg, rows, subjects = _load_complete_run(run_dir)
     scoring_note = ""
+    scoring: dict[str, Any] | None = None
     if scored_dir is not None:
         from scripts.validate_rescore import validate
         validate(run_dir, scored_dir)
         rows = [_read_json(path) for path in sorted((scored_dir / "samples").glob("*.json"))]
         scoring = _read_json(scored_dir / "scorer_source.json")
         scoring_note = (
-            f"- **사후 CPU 채점**: `{scoring['parser']}`, scorer SHA256 `{scoring['scoring_sha256']}`. "
-            "원본 GPU 응답/입력/종료 사유를 보존하여 재채점했으며 아래 시간·메모리는 원본 추론 실측이다.\n"
-            "- **재채점 원장**: 별도 보존된 `source.json`, `scorer_source.json`, `samples/`, `predictions.jsonl`; "
-            "새 GPU 추론이 아니며 원래 inference protocol을 소급 변경하지 않았다.\n"
+            "- 보고한 점수는 저장된 900개 응답을 변경하지 않고 §4의 최종 채점 규칙으로 다시 평가한 결과다. "
+            "시간·메모리는 해당 GPU 추론 실행의 측정값이다.\n"
         )
+    _validate_authored_v8_config(cfg, scoring)
     template = (ROOT / "reports/mmmu_baseline.md").read_text(encoding="utf-8")
     report, count = _DYNAMIC.subn(
         lambda match: match.group(1) + _dynamic_results(rows, subjects, cfg) + match.group(3), template
@@ -561,7 +595,7 @@ def render(run_dir: Path, output: Path, scored_dir: Path | None = None) -> None:
     if count != 1:
         raise ValueError("reports/mmmu_baseline.md must contain exactly one runtime report marker")
     report, count = _STATUS.subn(
-        lambda match: match.group(1) + _status_metrics(summary, manifest, run_dir) + scoring_note + match.group(3), report
+        lambda match: match.group(1) + (scoring_note or _status_metrics(summary, manifest, run_dir)) + match.group(3), report
     )
     if count != 1:
         raise ValueError("reports/mmmu_baseline.md must contain exactly one status report marker")

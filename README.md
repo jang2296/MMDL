@@ -52,8 +52,17 @@ vLLM lock은 실제 추론 환경에 검사 도구(Ruff/mypy 및 의존 패키�
 원본 실행 당시 환경은 별도 `environment.json` 기록과 구분한다.
 
 `--model-path`는 아래 공식 ID 또는 동일 revision의 로컬 snapshot을 받습니다.
-`--data-root`는 기본 위치에서 자동 취득하거나, 준비된 `manifest.json`과 30개
-validation parquet가 있는 경로를 받습니다. 다른 경로는 환경변수/인자로 바꾸면 됩니다.
+기본 데이터 경로가 비어 있으면 평가 명령이 모델·데이터를 준비합니다. 데이터 `manifest.json`만
+있고 모델 cache가 없는 사용자 경로라면, 평가 전에 다음 명령으로 모델과 데이터 manifest를 맞춥니다.
+
+```bash
+python -m mmdl.data.download --data-root "$MMDL_DATA_ROOT" --cache "$HF_HOME" --artifact-root "$MMDL_ARTIFACT_ROOT" --skip-pro
+```
+
+이 명령은 고정 revision을 취득·검증하고 MMMU-Pro 취득은 건너뜁니다. 위 준비 명령의
+`--data-root`는 데이터 저장 루트이고, 아래 평가 명령의 `--data-root`는 그 아래
+`evaluation/mmmu`입니다. 평가에 별도 데이터 경로를 지정한다면 그곳에 준비된
+`manifest.json`과 30개 validation parquet가 있어야 합니다.
 고정 revision·파일 hash·BF16을 검사하며, OOM이라고 모델/해상도/길이를 자동 변경하지 않습니다.
 
 | 대상 | 고정 revision | 현재 용도 |
@@ -76,17 +85,18 @@ GitHub 웹에서 실행 버튼을 누르는 방식이 아니라, GPU 환경에�
 bash scripts/eval.sh --protocol configs/eval/mmmu_val_v8.yaml --hardware configs/hardware/rtx4090_24gb.yaml --model-ref manifests/models/baseline.json --model-path Qwen/Qwen3-VL-4B-Instruct --data-root "$MMDL_DATA_ROOT/evaluation/mmmu" --artifact-root "$MMDL_ARTIFACT_ROOT" --public-root "$MMDL_ARTIFACT_ROOT/public" --job-id "$MMDL_JOB_ID" --run-role evaluation --require-commit "$(git rev-parse HEAD)" --run-id "${MMDL_JOB_ID}-evaluation" --mode full
 ```
 
-프롬프트P0, 출력32768, sampling0.7/0.8/20·presence1.5, 이미지1003520–4014080,
-context40960을 고정합니다. 다른 YAML은 기존 실행 재현·회귀 검사에 필요한 버전이며
-현재 제출용 진입점은 **mmmu_val_v8.yaml 하나**입니다.
+보고서의 프롬프트, 출력32768, sampling0.7/0.8/20·presence1.5, 이미지1003520–4014080,
+context40960을 고정합니다.
+CLI의 기본 설정과 현재 제출용 진입점은 **`configs/eval/mmmu_val_v8.yaml`**입니다.
+다른 `configs/eval/` YAML은 이전 실행이나 회귀 확인용 설정입니다.
 
 위 명령은 환경 설치 후 모델·데이터 준비 → 900문항 추론 → V8 채점 → 결과 저장을 수행합니다.
 `scripts/reproduce.sh`는 별도의 RunPod 운영용 wrapper이며, persistent volume·예산/종료 정책
 등 추가 환경 설정을 검사하는 경로입니다. 위 직접 평가 명령에는 그 운영용 설정이 필요하지 않습니다.
 
-학습 후에는 `--model-ref`와 `--model-path`를 해당 checkpoint manifest/path로 바꿉니다.
-`full/merged/adapter`의 base revision·학습 설정·데이터 hash·artifact 출처를 요구합니다.
-실제 학습 코드/학습 결과는 아직 완료되지 않았으며, 빈 학습 구현을 제출하지 않습니다.
+현재 공개 범위는 평가·저장 응답 재채점입니다. 학습과 데이터 증강은 구현·실행하지 않았습니다.
+향후 학습 checkpoint 평가에는 `--model-ref`와 `--model-path`를 바꾸고,
+`full/merged/adapter`의 base revision·학습 설정·데이터 hash·artifact 출처를 제공해야 합니다.
 
 ## 3. 결과 확인·CPU 재채점·보고서
 
@@ -108,9 +118,32 @@ python -m scripts.report_baseline --run-dir "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB
 원본 응답을 배포하지 않아도 위 평가 명령으로 데이터를 정식 취득해 새 실행할 수 있습니다.
 기존 응답의 완전 동일 재채점에는 별도 보존 원장이 필요하며 이 저장소에 포함되지 않습니다.
 
-## 4. 저장소 범위
+## 4. 저장소 범위와 디렉터리
 
-`src/` 평가기, `scripts/` 실행·검증, `configs/` 고정 조건, `env/` exact lock,
-`prompts/` P0, `manifests/` 모델/데이터 hash, `third_party/` 고정 출처·license,
-`tests/` CPU 회귀 검사, `results/` 작은 확정 집계만 포함합니다.
-내부 에이전트 지침, 개발 대화/감사 폴더, 강의 PDF, 모델·데이터 원문은 공개하지 않습니다.
+```text
+MMDL/
+├── README.md         설치·평가·결과 확인 안내
+├── pyproject.toml    Python 패키지 설치 정보
+├── .env.example      외부 저장 경로·운영 환경변수 예시
+├── .gitignore        대용량·비공개 파일 제외
+├── assignment/       과제 지정 경로의 보고서 링크
+├── configs/
+│   ├── eval/         현재 기본은 mmmu_val_v8.yaml; 나머지는 이전 실행·회귀용
+│   └── hardware/     GPU별 실행 자원 프로필
+├── env/              고정된 평가·vLLM 의존성 lock
+├── manifests/        모델·데이터 revision과 파일 hash
+├── prompts/          평가 프롬프트 템플릿
+├── reports/          제출 baseline 보고서
+├── results/          작은 공개 점수·검증 요약
+├── scripts/          평가·재채점·검증 진입점
+├── src/mmdl/
+│   ├── data/          고정 모델·데이터 취득
+│   ├── evaluation/    MMMU 데이터, 프롬프트, backend, 채점, 결과 저장
+│   └── runtime/       계약·환경·artifact·재현 지원
+├── tests/unit/        CPU 회귀 검사
+└── third_party/       출처가 고정된 evaluator·참고 코드와 license
+```
+
+결과 원문, 개별 응답, 이미지와 HTML 열람본은 `MMDL_ARTIFACT_ROOT` 아래에 저장하며
+GitHub에는 작은 확정 집계만 포함합니다. 내부 에이전트 지침, 개발 대화/감사 폴더,
+강의 PDF, 모델·데이터 원문은 공개하지 않습니다.
