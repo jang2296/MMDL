@@ -1,7 +1,7 @@
 # MMMU-val Baseline Evaluation Report — Qwen3-VL-4B-Instruct
 
-- **팀명**: 미제공
-- **팀원**: 미제공
+- **팀명**: Team 2
+- **팀원**: 장우석, 정예찬, 김기원, 김정현
 - **작성일**: 2026-09-25
 - **재현 커맨드**: 환경 설치 후 아래 §1의 `bash scripts/eval.sh ...` 실행
 
