@@ -77,10 +77,16 @@ def _hardware_path(run_dir: Path, manifest: dict[str, Any]) -> Path | None:
 
 
 def _seconds(value: Any) -> str:
+    """Display elapsed time rounded to whole seconds, without wrapping at 24 hours."""
     if value is None:
         return "미제공"
-    assert value is not None
-    return f"{float(value):.3f} s"
+    hours, remainder = divmod(round(float(value)), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}시간 {minutes}분 {seconds}초"
+    if minutes:
+        return f"{minutes}분 {seconds}초"
+    return f"{seconds}초"
 
 
 def _percent(value: float) -> str:
@@ -493,7 +499,7 @@ def _runtime_metrics(summary: dict[str, Any], environment: dict[str, Any], backe
         f"| 추론 백엔드 | `{backend_name}` `{version}`, 최대 {execution.get('batch_size', '미제공')}개 요청의 연속 배치 |\n"
         f"| 사용 GPU | {_gpu_text(environment)} |\n"
         f"| 실측 peak VRAM | {device_memory} |\n"
-        f"| 총 소요 시간 | {timing} (설치·다운로드 제외) |\n"
+        f"| 총 소요 시간 | {timing} (초 단위 반올림, 설치·다운로드 제외) |\n"
         f"| 주요 환경 | {environment.get('platform', {}).get('system', '미제공')}, Python {environment.get('python', '미제공')}, PyTorch {packages.get('torch', '미제공')}, Transformers {packages.get('transformers', '미제공')} |\n"
         f"| 의존성 | [env/{lock}](../env/{lock}) |\n"
     )

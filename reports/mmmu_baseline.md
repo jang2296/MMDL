@@ -18,7 +18,7 @@
 | 추론 백엔드 | `vllm` `0.11.0`, 최대 2개 요청의 연속 배치 |
 | 사용 GPU | NVIDIA GeForce RTX 3090 (24576 MiB) |
 | 실측 peak VRAM | 장치 전체 사용량의 관측 최대 22.87 GiB (500 ms 간격). vLLM allocator의 정확한 peak는 미측정; driver·다른 프로세스 사용량이 포함될 수 있음 |
-| 총 소요 시간 | 평가 89561.304 s; 모델 로드 27.700 s; 전체 호출 89608.979 s (설치·다운로드 제외) |
+| 총 소요 시간 | 평가 24시간 52분 41초; 모델 로드 28초; 전체 호출 24시간 53분 29초 (초 단위 반올림, 설치·다운로드 제외) |
 | 주요 환경 | Linux, Python 3.12.3, PyTorch 2.8.0+cu128, Transformers 4.57.1 |
 | 의존성 | [env/requirements-vllm.lock](../env/requirements-vllm.lock) |
 <!-- REPORT_RUNTIME:END -->

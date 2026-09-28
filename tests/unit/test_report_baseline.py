@@ -9,6 +9,15 @@ from scripts import report_baseline
 
 
 class ReportBaselineTests(unittest.TestCase):
+    def test_elapsed_time_is_readable_and_does_not_wrap_after_24_hours(self):
+        cases = ((None, "미제공"), (0, "0초"), (27.7, "28초"),
+                 (59.9, "1분 0초"), (3599.9, "1시간 0분 0초"),
+                 (89561.30404669605, "24시간 52분 41초"),
+                 (89608.97911058785, "24시간 53분 29초"))
+        for seconds, expected in cases:
+            with self.subTest(seconds=seconds):
+                self.assertEqual(report_baseline._seconds(seconds), expected)
+
     def test_complete_run_accepts_current_and_legacy_labels_without_relabeling(self):
         cfg = {"protocol_id": report_baseline.FINAL_PROTOCOL_ID,
                "generation": {"max_new_tokens": 32768},
@@ -172,7 +181,10 @@ class ReportBaselineTests(unittest.TestCase):
 
     def test_runtime_metrics_are_only_table_rows_and_fall_back_to_summary_snapshot(self):
         runtime = report_baseline._runtime_metrics(
-            {"max_observed_device_memory_used_bytes": 22.87 * 1024**3},
+            {"max_observed_device_memory_used_bytes": 22.87 * 1024**3,
+             "evaluation_seconds_this_invocation": 89561.30404669605,
+             "model_load_seconds": 27.699769438244402,
+             "total_seconds_this_invocation": 89608.97911058785},
             {"python": "3.12.3", "packages": {"vllm": "0.11"}},
             {"vllm": {"version": "0.11"}},
             {"identity": {}},
@@ -184,6 +196,8 @@ class ReportBaselineTests(unittest.TestCase):
         self.assertIn("snapshot 최대치", runtime)
         self.assertIn("Python 3.12.3", runtime)
         self.assertIn("../env/requirements-vllm.lock", runtime)
+        self.assertIn("평가 24시간 52분 41초; 모델 로드 28초; 전체 호출 24시간 53분 29초", runtime)
+        self.assertIn("초 단위 반올림, 설치·다운로드 제외", runtime)
         self.assertNotIn("###", runtime)
 
     def test_authored_v8_guard_rejects_mismatched_static_settings(self):
