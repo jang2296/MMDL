@@ -1,0 +1,11 @@
+name: a100_sxm_80gb
+placement: gpu_only
+gpu_index: 0
+expected_vram_gib: 80
+gpu_weight_cap_gib: 72.0
+gpu_reserve_gib: 6.0
+cpu_weight_cap_gib: 24.0
+cpu_available_fraction: 0.65
+min_free_gpu_gib: 70.0
+allow_disk_offload: false
+num_workers: 0

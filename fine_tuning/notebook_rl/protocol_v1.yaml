@@ -1,0 +1,90 @@
+protocol_id: notebook-rl-v1
+status: DESIGNED            # 구현·gate 통과 후 FROZEN
+initial_checkpoint:
+  model_id: Qwen/Qwen3-VL-4B-Instruct
+  revision: ebb281ec70b05090aa6165b016eac8ec08e71b17
+  manifest: manifests/models/baseline.json
+forbidden:
+  additional_sft: true
+  teacher_or_upper_model_labels: true
+  benchmark_training: true            # MMMU dev/val/test, MMMU-Pro std10/std4/vision, 파생물
+environment:
+  lock: env/requirements-vllm.lock     # torch 2.8.0+cu128, transformers 4.57.1, peft 0.17.1, vllm 0.11.0
+  data_lock: fine_tuning/notebook_rl/requirements-data.lock
+image:                                  # 평가와 동일
+  preprocessing: qwen_vl_utils_0_0_14
+  min_pixels: 1003520
+  max_pixels: 4014080
+  max_images_per_problem: 2          # 재풀이 학습 문맥 한도 때문 (§7.3). pilot 출처는 모두 1장
+context_limit: 16384
+data_selection:                         # §12.7; frozen before learning, never selected on held-out results
+  min_open_answer_fraction: 0.60
+  mcq_choices: 10
+  phase_a: {n: 8, max_pass_rate: 0.75, max_zero_pass_fraction: 0.50}
+  blind: {n: 4, accuracy_floor: 0.25, threshold: max_chance_and_floor}
+rollout:
+  sampler: {temperature: 1.0, top_p: 1.0, top_k: 0, presence_penalty: 0.0, repetition_penalty: 1.0}
+  n: {1: 8, 2: 4, 3: 4}
+  branch: {1: 2, 2: 1}
+  max_attempts: 2                       # ALG-NB3에서 3
+  max_new_tokens: {1: 3072, 2: 3072, 3: 3072}   # Phase A 후 확정 (§7.6)
+  diag: {enabled_in: [ALG-NB+D, ALG-NB+D+V], n: 4, max_new_tokens: 256, class_cap: 0.5}
+  oracle_counterfactual: false
+  self_perception_probe: false
+  mode_assignment: sha256_parity        # obs / plain 50:50
+reward:
+  answer_extractor: strict-final-v1
+  visual_lambda: 0.1                    # ALG-NB+D+V에서만
+  diag: {cause_match: 1.0, slot_bonus: 0.25}
+  overlong: {enabled: false, buffer: 512, weight: 0.5}
+loss:
+  advantage: group_mean_no_std
+  clip: {eps_low: 0.2, eps_high: 0.28}
+  kl: {estimator: k3, beta: 0.01, reference: peft_disable_adapter}
+  mismatch: {level: sequence_mean_log_ratio, delta_seq: 0.05, stop_if_masked_fraction_gt: 0.05, consecutive_steps: 3}   # delta_seq는 G7 실측으로 확정
+  normalization: constant_n_times_cap   # Dr. GRPO
+  group_weights: {T1: 1.0, T2: 1.0, T3: 1.0, DIAG: 0.5}
+  updates_per_batch: 1
+optimizer:
+  type: adamw
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.0
+  lr: {L: 1.0e-5, M: 1.0e-6, V: 1.0e-6}
+  warmup_steps: 10
+  schedule: constant_after_warmup
+  grad_clip_per_group: 1.0
+model:
+  lora: {r: 16, alpha: 32, dropout: 0.0, bias: none}
+  llm_targets: inspect_modules.targets.L     # 252 Linear
+  vision_targets: inspect_modules.targets.V  # 48 Linear (attn.qkv, attn.proj)
+  modules_to_save:
+    - model.visual.merger
+    - model.visual.deepstack_merger_list.0
+    - model.visual.deepstack_merger_list.1
+    - model.visual.deepstack_merger_list.2
+  merger_master_dtype: float32
+  gradient_checkpointing: non_reentrant
+  logprob_chunk: 1024
+expected_trainable: {L: 33030144, M: 109105152, V: 2359296}
+arms: [MOD-FML, MOD-FVML, MOD-RV, MOD-RR, MOD-RS]
+algorithms: [ALG-T1, ALG-NB, ALG-NB3, ALG-NB+D, ALG-NB+D+V, ALG-NB-noteonly, CTL-RAND, CTL-FORMAT, CTL-BLIND]
+route_rule: verified-any-visual-v1
+batch: {problems_per_step: 8, max_attempted_problems_per_step: 24, epochs: 1}
+seeds: [3407, 3408, 3409]
+engine:
+  vllm: {enforce_eager: false, enable_prefix_caching: false, mm_processor_cache_gb: 0,
+         kv_cache_memory_bytes: 10737418240, max_num_seqs: 16, multiprocessing: false}
+  probe_max_mean_abs_logprob_diff: 0.02      # G7 후 확정
+health:                                      # §18.6
+  kl_max: 0.1
+  length_median_min_ratio: 0.3
+  short_response_max_fraction: 0.2
+  truncation_max: 0.3
+  unverifiable_max: 0.01
+  dev_drop_pp: 5
+evaluation:
+  external_first_attempt: {sampler: qwen_official, n: 4}
+  pass_at_k: {n: 8, k: [1, 4, 8], temperature: 1.0}
+  mmmu_final: {protocol: experiments/input-recovery protocol input-recovery-v1, max_new_tokens: 8192, parser: team-final-answer-v8}
+prompts_sha256: 6d1b9888d32d9b50650647ea63f0566886b1155b5d314d299a3017cccfdefb3c

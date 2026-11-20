@@ -1,0 +1,39 @@
+checker_version: compassverifier-checker-v1
+scoring_id: team-final-answer-v8+compassverifier-checker-v1
+base_parser: team-final-answer-v8
+direction: v8_wrong_to_correct_only
+
+base_parser_files:
+  src/mmdl/evaluation/final_answer_parser.py: fc2c6a757ce7361efae13be9f22f8bedcc9c35d66373124b8815b8528b2e31a0
+  src/mmdl/evaluation/final_answer_parser_v8.py: 2beb1230283cb882f47d6e8af72b01180847fd7aa4b7ac640a5173e391f3f891
+  src/mmdl/evaluation/parsers.py: 1bfdabe251d5cbf14b6554f2c979492ec18207de5fb826a0045dd2d93ca3e221
+  third_party/mmmu/eval_utils.py: cc1a89b4a27f697702d340bc6a7578b5237135754ddaa9ef105239a3d9847367
+
+judge:
+  official:
+    model: opencompass/CompassVerifier-7B
+    revision: 8fee654b23ec971ad4a5c6d69bd99cf0f0188197
+    dtype: bfloat16
+    quantization: none
+  smoke_allowed:
+    - {model: opencompass/CompassVerifier-3B, revision: 27d6d660bdf6c2b8a9f45906d4b76c508af65ab0}
+    - {model: opencompass/CompassVerifier-7B, revision: 8fee654b23ec971ad4a5c6d69bd99cf0f0188197}
+  prompt:
+    repo: open-compass/CompassVerifier
+    commit: 2d7cba6df0b21f9c6121786ac1e5770c68473598
+    path: src/prompts.py
+    constant: CV_PROMPT
+    text_sha256: aee9c27520639ca543f0b5077164dc32c1976be0f16c87bee7055f3b7ba45e72
+  labels: {A: CORRECT, B: INCORRECT, C: INVALID}
+
+selection:
+  finish_reason: stop
+  categories: [NO_PARSE_STOP, OPEN_MISMATCH_STOP]
+
+input:
+  question_field: prompt
+  mcq_gold_format: "{letter}. {option_text}"
+  response_tail_tokens: 3072
+
+decision:
+  accept_threshold: 0.90

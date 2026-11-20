@@ -1,0 +1,26 @@
+{
+  "kind": "export-reference",
+  "name": "v18b-slot206-MOD-RV",
+  "base": {
+    "id": "Qwen/Qwen3-VL-4B-Instruct",
+    "revision": "ebb281ec70b05090aa6165b016eac8ec08e71b17"
+  },
+  "format": "derived-hf-bf16-unmerged-lora-v1",
+  "slot": 206,
+  "export_root_env": "MMDL_V18B_EXPORT_ROOT",
+  "reference_sha256": "4ee731a3447b619d647f7fef31aedc8f4ab8bb7998baf0e7eaea39338e0c5a54",
+  "export_manifest_sha256": "7674cac56213bf5580c7a86033952d81409b59882b281f268795bfd32a3a7df2",
+  "checkpoint_files": {
+    "adapter.safetensors": "b815647edeebbd24c6d1840f40e841d45d000d94b0321caa901860b7255c8e2d",
+    "mergers.safetensors": "5c69396a05c1fb97b05865d0afd490f9f231e608f08d69480681aa21387ae322",
+    "metadata.json": "7c65895001017691d9e3160b78538873f23b4227eccc3322cbe7b1a31d2dca8b",
+    "metadata.sha256": "f08fe692d0c9c0f40ef794641ee4116984eb33d2701ef37c27fbe93464645ace",
+    "runtime.pt": "2d92ea8100586c319b2189ad117ff4905385a07171863cd033c3145bbf37c378"
+  },
+  "training_commits": [
+    "d9f7da6cb842437a6f0344006d17db762bfb10b4",
+    "6dbc649b5f23463ff8b2fb50e97ac516e856a004"
+  ],
+  "evaluation_commit": "00fffac4f569dec3adbada1790af7b1af1b72c62",
+  "recovery_tar_sha256": "124da21fc886a17dd30a235e4c46c748eb4d4251b4262e122d3421ff7c449759"
+}

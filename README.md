@@ -1,4 +1,9 @@
-# MMDL — Assignment #1
+# Team 2 · Qwen3-VL-4B-Instruct 평가와 파인튜닝
+
+일반 MMMU validation의 원본은 V8 **558/900 (62.00%)**, V8와 CompassVerifier-7B를 함께 쓰면 **566/900 (62.89%)**입니다. 최종 v18b(slot 206)는 같은 두 기준에서 **573/900 (63.67%)**, **591/900 (65.67%)**입니다. 아래 보고서에서 기존 체크포인트 복원, 원본부터 재학습, MMMU와 MMMU-Pro의 모델별 평가 명령을 확인할 수 있습니다. [v18b 재현 및 평가 안내](reports/finetune_v18b.md)
+
+## 기존 Assignment #1
+
 
 Qwen3-VL-4B-Instruct의 MMMU validation **900문항 평가 파이프라인**입니다.
 현재 기준은 `team-final-answer-v8`입니다. 공식 점수에 맞춰 답을 고르지 않으며,
@@ -17,7 +22,7 @@ Qwen3-VL-4B-Instruct의 MMMU validation **900문항 평가 파이프라인**입�
 
 새 GPU 추론이나 fine-tuning 점수가 아닙니다. 원래 RTX3090 실행의 응답은 보존했고
 V8으로만 재채점했습니다. 공식 비교값67.4%와의 격차, 구현 출처와 한계는 보고서에 있습니다.
-V8의 새 GPU 실행·실제 RTX4090 검증·학습은 아직 하지 않았습니다.
+이 절의 실측 장비는 RTX 3090입니다. 후속 학습과 A100 평가 결과는 위 v18b 보고서에 수록했습니다.
 
 ## 1. 환경과 저장 위치
 

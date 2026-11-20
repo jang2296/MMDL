@@ -88,7 +88,8 @@ def git_commit(root, required=None):
             raise ValueError("Checkout does not match required Git commit")
         dirty = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=root)
         extra = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "--",
-                                         "src", "scripts", "configs", "prompts", "env", "third_party"], cwd=root)
+                                         "src", "scripts", "configs", "prompts", "env", "third_party",
+                                         "fine_tuning", "manifests"], cwd=root)
         if dirty.strip() or extra.strip():
             raise ValueError("Reproducible inference requires a clean committed checkout")
     return commit

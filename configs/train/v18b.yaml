@@ -1,0 +1,26 @@
+# Set the two interpreters to separate environments installed from the public locks.
+version: v18b-public-training-v1
+python: ${MMDL_TRAIN_PYTHON}
+data_python: ${MMDL_DATA_PYTHON}
+model_path: ${MMDL_MODEL_PATH}
+data_root: ${MMDL_DATA_ROOT}/training/v18b
+cache_dir: ${MMDL_DATA_ROOT}/source-cache
+artifact_root: ${MMDL_ARTIFACT_ROOT}
+run_id: v18b-retrain
+gpu_type: NVIDIA A100-SXM4-80GB
+timeouts:
+  cpu: 7200
+  calibrate: 1800
+  reload: 1800
+  export: 3600
+# A planning estimate, never a training cutoff.
+training_estimate_seconds: 25200
+training_estimate_basis: Original v18b training allowance; new hardware and fresh preparation need new measurements.
+guard_risk_acceptance: null
+execution_settings:
+  execution_mode: on_prem
+  evaluation_strategy: one_pod
+  training_cutoff_seconds: null
+  limit_action: warn
+  monitor_stop_action: evaluate_checkpoint
+  reuse_f0_raw: false

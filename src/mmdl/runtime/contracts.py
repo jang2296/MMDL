@@ -49,6 +49,34 @@ for _protocol in CONTROL_IMAGES:
 EXECUTION_PROFILES["mmmu-val-official-vllm-b2-v2"]["batch_size"] = 2
 CONTROL_IMAGES["mmmu-val-v8"] = dict(CONTROL_IMAGES["mmmu-val-official-vllm-b2-v2"])
 EXECUTION_PROFILES["mmmu-val-v8"] = dict(EXECUTION_PROFILES["mmmu-val-official-vllm-b2-v2"])
+# New profiles carry their own engine controls; historical configs remain byte-for-byte valid.
+SUBMISSION_PROFILES = {
+    "mmmu-val-v18b-ft-a100-v1": ("mmmu-val", 9, 5, "a100"),
+    "mmmu-val-v18b-ft-4090-v1": ("mmmu-val", 1, 5, "4090"),
+    "mmmu-pro-standard10-v8-a100-v1": ("mmmu-pro", 9, 7, "a100"),
+    "mmmu-pro-standard10-v8-4090-v1": ("mmmu-pro", 1, 7, "4090"),
+}
+for _protocol, (_suite, _slots, _images, _hardware) in SUBMISSION_PROFILES.items():
+    CONTROL_IMAGES[_protocol] = dict(CONTROL_IMAGES["mmmu-val-v8"])
+    EXECUTION_PROFILES[_protocol] = dict(EXECUTION_PROFILES["mmmu-val-v8"]) | {
+        "batch_size": _slots, "max_images_per_prompt": _images, "enforce_eager": False,
+        "gpu_memory_utilization": 0.90, "kv_safety_fraction": 0.90,
+        "logprobs_mode": "raw_logprobs",
+    }
+
+
+def validate_profile_model(cfg, kind):
+    """Keep historical base runs separate from nonmerged FT and Pro profiles."""
+    pid = cfg.get("protocol_id")
+    if kind == "unmerged-lora" and pid not in SUBMISSION_PROFILES:
+        raise ValueError("Unmerged LoRA requires a named submission profile")
+    if pid in SUBMISSION_PROFILES:
+        if kind not in {"base", "unmerged-lora"}:
+            raise ValueError("Submission profiles support base or unmerged-lora models")
+        if SUBMISSION_PROFILES[pid][0] == "mmmu-val" and kind != "unmerged-lora":
+            raise ValueError("The historical FT MMMU profile requires unmerged-lora")
+
+
 HARDWARE_KEYS = set("name placement gpu_index expected_vram_gib gpu_weight_cap_gib "
                     "gpu_reserve_gib cpu_weight_cap_gib cpu_available_fraction "
                     "min_free_gpu_gib allow_disk_offload num_workers".split())
@@ -69,9 +97,14 @@ def load_configs(protocol, hardware):
 def validate_configs(cfg, hw):
     if cfg["model"] != dict(id=MODEL_ID, revision=MODEL_REVISION, dtype="bfloat16"):
         raise ValueError("The official base model, revision and BF16 are fixed")
-    if cfg["dataset"] != dict(id=DATA_ID, revision=DATA_REVISION, split="validation",
-                              subjects=SUBJECTS, expected_total=900, per_subject=30):
-        raise ValueError("Only pinned MMMU validation, all 30 subjects, is allowed")
+    profile = SUBMISSION_PROFILES.get(cfg.get("protocol_id"))
+    dataset = (dict(id=PRO_ID, revision=PRO_REVISION, config="standard (10 options)",
+                    split="test", subjects=SUBJECTS, expected_total=1730)
+               if profile and profile[0] == "mmmu-pro" else
+               dict(id=DATA_ID, revision=DATA_REVISION, split="validation",
+                    subjects=SUBJECTS, expected_total=900, per_subject=30))
+    if cfg["dataset"] != dataset:
+        raise ValueError("Dataset must match the named pinned suite and its full coverage")
     if set(cfg["generation"]) != set(RECIPE) | {"max_new_tokens"}:
         raise ValueError("Unknown or missing generation controls")
     if any(cfg["generation"].get(k) != v for k, v in RECIPE.items()):
@@ -79,7 +112,7 @@ def validate_configs(cfg, hw):
     if cfg["execution"] != EXECUTION_PROFILES.get(cfg.get("protocol_id")) or cfg["prompt_policy"] != "P0":
         raise ValueError("Execution must match a named fixed protocol; P0 is unchanged")
     expected_parser = "team-final-answer-v4" if cfg["protocol_id"] in CONTROL_IMAGES else "mmmu-official-no-random-v1"
-    if cfg["protocol_id"] == "mmmu-val-v8":
+    if cfg["protocol_id"] == "mmmu-val-v8" or profile:
         expected_parser = "team-final-answer-v8"
     if cfg["parser"] != expected_parser:
         raise ValueError("Unknown parser")
@@ -100,6 +133,12 @@ def validate_configs(cfg, hw):
         if cfg["generation"]["max_new_tokens"] != output_limit or image != dict(
                 min_pixels=262144, max_pixels=1310720, resize_owner="official_processor"):
             raise ValueError("Named acceleration protocol length and image budgets are fixed")
+    if profile:
+        if profile[3] == "a100" and (hw["name"] not in {"a100_sxm_80gb", "a100_pcie_80gb"}
+                                      or hw["expected_vram_gib"] != 80):
+            raise ValueError("The nine-slot submission profile requires A100 80GB")
+        if profile[3] == "4090" and (hw["name"] != "rtx4090_24gb" or hw["expected_vram_gib"] != 24):
+            raise ValueError("The 4090 profile requires its separately registered hardware")
     if set(hw) != HARDWARE_KEYS:
         raise ValueError("Hardware profile must contain placement controls only")
     if hw["placement"] not in {"gpu_only", "cpu_offload"} or hw["allow_disk_offload"] is not False:

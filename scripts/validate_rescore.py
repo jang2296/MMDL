@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only integrity and replay check for a V8 rescore artifact."""
+"""Read-only integrity and replay check for a suite's V8 rescore artifact."""
 
 from __future__ import annotations
 
@@ -32,9 +32,18 @@ def _require(ok: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _records(run_dir: Path) -> dict[str, dict[str, Any]]:
+def _records(run_dir: Path, suite: str = "mmmu-val") -> dict[str, dict[str, Any]]:
     paths = sorted((run_dir / "samples").glob("*.json"))
-    _require(len(paths) == 900, f"Expected 900 sample records in {run_dir}")
+    count = 900 if suite == "mmmu-val" else 1730
+    registration = read_json(run_dir / "run_manifest.json")
+    expected = registration.get("expected_ids", [])
+    mapping = registration.get("identity", {}).get("id_subjects")
+    _require(len(paths) == count, f"Expected {count} sample records in {run_dir}")
+    _require(len(expected) == count and len(set(expected)) == count,
+             "Invalid registered sample IDs")
+    if suite == "mmmu-pro":
+        _require(isinstance(mapping, dict) and set(mapping) == set(expected)
+                 and set(mapping.values()) == set(SUBJECTS), "Invalid registered Pro subjects")
     result = {}
     for path in paths:
         row = read_json(path)
@@ -44,19 +53,22 @@ def _records(run_dir: Path) -> dict[str, dict[str, Any]]:
                  f"Sample filename/ID mismatch: {path}")
         _require(sample_id not in result, f"Duplicate sample ID: {sample_id}")
         subject = row.get("subject")
-        mapped_subject = next((name for name in sorted(SUBJECTS, key=len, reverse=True)
-                               if sample_id.startswith(f"validation_{name}_")), None)
+        mapped_subject = (mapping.get(sample_id) if suite == "mmmu-pro" else next(
+            (name for name in sorted(SUBJECTS, key=len, reverse=True)
+             if sample_id.startswith(f"validation_{name}_")), None))
         _require(mapped_subject == subject, f"Sample ID/subject mismatch: {sample_id}")
         index = sample_id.rsplit("_", 1)[-1]
-        _require(index.isdecimal() and 1 <= int(index) <= 30,
+        _require(suite == "mmmu-pro" or (index.isdecimal() and 1 <= int(index) <= 30),
                  f"Sample ID is outside the expected 30-item range: {sample_id}")
         _require(row.get("status") == "COMPLETED", f"Sample is not completed: {sample_id}")
         _require(type(row.get("correct")) is bool, f"Sample correctness is not boolean: {sample_id}")
         _require(row.get("_record_sha256") == digest({k: v for k, v in row.items() if k != "_record_sha256"}),
                  f"Sample record hash mismatch: {sample_id}")
         result[sample_id] = row
-    _require(Counter(row.get("subject") for row in result.values()) == Counter({s: 30 for s in SUBJECTS}),
-             f"Expected 30 records per MMMU subject in {run_dir}")
+    _require(set(result) == set(expected), "Sample IDs differ from registration")
+    if suite == "mmmu-val":
+        _require(Counter(row.get("subject") for row in result.values()) == Counter({s: 30 for s in SUBJECTS}),
+                 f"Expected 30 records per MMMU subject in {run_dir}")
     return result
 
 
@@ -70,18 +82,19 @@ def _predictions(path: Path, records: dict[str, dict[str, Any]]) -> None:
 
 
 def _summary(run_dir: Path, records: dict[str, dict[str, Any]]) -> int:
+    count = len(records)
     summary = read_json(run_dir / "summary.json")
-    _require(summary.get("status") == "COMPLETE" and summary.get("mode") == "full",
-             f"Run is not COMPLETE/full: {run_dir}")
-    _require(all(summary.get(key) == 900 for key in SUMMARY_COUNTS)
+    _require(summary.get("status") in {"COMPLETE", "PARTIAL"}
+             and summary.get("mode") in {"full", "partial"},
+             f"Run has no completed or historical partial record: {run_dir}")
+    _require(all(summary.get(key) == count for key in SUMMARY_COUNTS)
              and summary.get("missing_count") == 0 and summary.get("unresolved_failure_count") == 0,
              f"Incomplete summary counts: {run_dir}")
     correct = sum(row.get("correct") is True for row in records.values())
     _require(summary.get("correct") == correct and summary.get("missing_ids") == [],
              f"Summary correctness differs from sample rows: {run_dir}")
-    for key in ("accuracy", "macro_average"):
-        _require(math.isclose(float(summary.get(key, -1)), correct / 900, rel_tol=0, abs_tol=1e-12),
-                 f"Summary {key} differs from sample rows: {run_dir}")
+    _require(math.isclose(float(summary.get("accuracy", -1)), correct / count, rel_tol=0, abs_tol=1e-12),
+             f"Summary accuracy differs from sample rows: {run_dir}")
 
     subject_scores = summary.get("subject_scores")
     _require(isinstance(subject_scores, list) and len(subject_scores) == 30,
@@ -97,14 +110,18 @@ def _summary(run_dir: Path, records: dict[str, dict[str, Any]]) -> int:
         generation_seconds = math.fsum(row["generation_seconds"] for row in rows)
         sample_seconds = math.fsum(row.get("total_sample_seconds", row["generation_seconds"])
                                    for row in rows)
-        _require(score.get("correct") == subject_correct and score.get("total") == 30
-                 and math.isclose(float(score.get("accuracy", -1)), subject_correct / 30,
+        _require(score.get("correct") == subject_correct and score.get("total") == len(rows)
+                 and math.isclose(float(score.get("accuracy", -1)), subject_correct / len(rows),
                                   rel_tol=0, abs_tol=1e-12)
                  and math.isclose(float(score.get("generation_seconds", -1)), generation_seconds,
                                   rel_tol=1e-12, abs_tol=1e-12)
                  and math.isclose(float(score.get("sample_seconds", -1)), sample_seconds,
                                   rel_tol=1e-12, abs_tol=1e-12),
                  f"Subject summary differs from sample rows: {subject}")
+    macro = math.fsum(score["accuracy"] for score in scores.values()) / len(scores)
+    _require((summary.get("mode") == "partial" and summary.get("macro_average") is None)
+             or math.isclose(float(summary.get("macro_average", -1)), macro, rel_tol=0, abs_tol=1e-12),
+             f"Summary macro_average differs from sample rows: {run_dir}")
 
     with (run_dir / "subject_scores.csv").open(encoding="utf-8", newline="") as stream:
         csv_rows = list(csv.DictReader(stream))
@@ -113,7 +130,7 @@ def _summary(run_dir: Path, records: dict[str, dict[str, Any]]) -> int:
              f"Subject CSV rows differ from MMMU: {run_dir}")
     for subject, score in scores.items():
         csv_score = csv_scores[subject]
-        _require(int(csv_score["correct"]) == score["correct"] and int(csv_score["total"]) == 30
+        _require(int(csv_score["correct"]) == score["correct"] and int(csv_score["total"]) == score["total"]
                  and math.isclose(float(csv_score["accuracy"]), float(score["accuracy"]),
                                   rel_tol=0, abs_tol=1e-12)
                  and math.isclose(float(csv_score["generation_seconds"]),
@@ -156,8 +173,10 @@ def _verify_scorer(scored_dir: Path, identity: dict[str, Any]) -> str:
     return scoring_sha256
 
 
-def validate(source_run: Path, scored_dir: Path) -> dict[str, Any]:
-    """Verify the original 900-row source and its V8-only scored derivative."""
+def validate(source_run: Path, scored_dir: Path, suite: str = "mmmu-val") -> dict[str, Any]:
+    """Verify complete source records and their V8-only scored derivative."""
+    _require(suite in {"mmmu-val", "mmmu-pro"}, "Unknown evaluation suite")
+    count = 900 if suite == "mmmu-val" else 1730
     source_run, scored_dir = Path(source_run).resolve(), Path(scored_dir).resolve()
     source = read_json(scored_dir / "source.json")
     manifest = read_json(scored_dir / "run_manifest.json")
@@ -175,15 +194,15 @@ def validate(source_run: Path, scored_dir: Path) -> dict[str, Any]:
     _require(isinstance(original_cfg, dict) and rescored_cfg == (original_cfg | {"parser": PARSER}),
              "Rescore changed inference configuration beyond selecting V8 scoring")
 
-    original, rescored = _records(source_run), _records(scored_dir)
+    original, rescored = _records(source_run, suite), _records(scored_dir, suite)
     _require(set(original) == set(rescored), "Original and rescored sample IDs differ")
     expected_ids = manifest.get("expected_ids")
-    _require(isinstance(expected_ids, list) and len(expected_ids) == 900
-             and len(set(expected_ids)) == 900 and set(expected_ids) == set(original),
+    _require(isinstance(expected_ids, list) and len(expected_ids) == count
+             and len(set(expected_ids)) == count and set(expected_ids) == set(original),
              "Rescore manifest IDs differ from original sample IDs")
     source_ids = read_json(source_run / "run_manifest.json").get("expected_ids")
-    _require(isinstance(source_ids, list) and len(source_ids) == 900
-             and len(set(source_ids)) == 900 and set(source_ids) == set(original),
+    _require(isinstance(source_ids, list) and len(source_ids) == count
+             and len(set(source_ids)) == count and set(source_ids) == set(original),
              "Original manifest IDs differ from original sample IDs")
     _predictions(source_run / "predictions.jsonl", original)
     _predictions(scored_dir / "predictions.jsonl", rescored)
@@ -211,8 +230,8 @@ def validate(source_run: Path, scored_dir: Path) -> dict[str, Any]:
     source_correct = _summary(source_run, original)
     correct = _summary(scored_dir, rescored)
     return {"status": "VERIFIED", "parser": PARSER, "source_run": str(source_run),
-            "scored_dir": str(scored_dir), "samples": 900, "source_correct": source_correct,
-            "correct": correct, "accuracy": correct / 900,
+            "scored_dir": str(scored_dir), "samples": count, "source_correct": source_correct,
+            "correct": correct, "accuracy": correct / count,
             "source_predictions_sha256": source_sha256, "scoring_sha256": scoring_sha256}
 
 
@@ -220,8 +239,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-run", required=True, type=Path)
     parser.add_argument("--scored-dir", required=True, type=Path)
+    parser.add_argument("--suite", choices=["mmmu-val", "mmmu-pro"], default="mmmu-val")
     args = parser.parse_args()
-    print(json.dumps(validate(args.source_run, args.scored_dir), ensure_ascii=False, sort_keys=True))
+    print(json.dumps(validate(args.source_run, args.scored_dir, args.suite), ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":

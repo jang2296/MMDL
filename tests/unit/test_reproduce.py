@@ -81,7 +81,7 @@ class ReproduceTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue())["status"], "DRY_RUN")
 
     def test_refuses_moving_commit_unsafe_job_and_final_suite(self):
-        for extra in (["--commit", "main"], ["--job-id", "../escape"], ["--suite", "mmmu-pro"]):
+        for extra in (["--commit", "main"], ["--job-id", "../escape"], ["--suite", "mmmu-pro-vision-only"]):
             with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     arguments(["--job-id", "fixture", "--commit", "a" * 40] + extra)

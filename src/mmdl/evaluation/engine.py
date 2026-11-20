@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 
 from mmdl.evaluation.datasets.mmmu import load_validation, separate_sample
+from mmdl.evaluation.datasets import mmmu_pro
 from mmdl.evaluation.parsers import score_with_parser
 from mmdl.evaluation.prompt import build_messages
 from mmdl.evaluation.writer import RunWriter, finalize, render
@@ -56,13 +57,56 @@ def environment_identity(environment):
                      for gpu in environment["nvidia_smi"]["gpus"]])
 
 
-def code_records(root):
+def code_records(root, *, submission=False):
     paths = list((root / "src").rglob("*.py")) + list((root / "scripts").glob("*.sh"))
     paths += list((root / "scripts").glob("*.py"))
     paths += [root / "third_party/mmmu/eval_utils.py", root / "env/requirements-eval.lock",
               root / "pyproject.toml"]
     paths += list((root / "env").glob("requirements-vllm.lock"))
+    if submission:
+        # Training and reference-engine modules imported by the submission are
+        # pinned independently of this checkout's runtime-generated artifacts.
+        index = root / "manifests/publication/v18b_sources.json"
+        paths += [index]
+        for entry in read_json(index)["files"]:
+            name = entry["path"]
+            if not name.startswith("fine_tuning/") or not name.endswith(".py"):
+                continue
+            path = root / name
+            if ".." in Path(name).parts or path.is_symlink() or sha256_file(path) != entry["sha256"]:
+                raise ValueError(f"Submission source differs from publication manifest: {name}")
     return file_records(root, paths)
+
+
+def _evaluation_model(args, root):
+    from mmdl.runtime.model_reference import resolve_export_reference
+
+    rehearsal = getattr(args, "rehearsal", False)
+    base = read_json(root / "manifests/models/baseline.json")
+    ref = getattr(args, "resolved_model_reference", None) or read_json(args.model_ref)
+    if ref.get("kind") in {"export-reference", "derived-rehearsal", "unmerged-lora"}:
+        if getattr(args, "resolved_model_reference", None) is None:
+            _, args.model_path, ref = resolve_export_reference(args.model_ref, args.model_path)
+    else:
+        verify_model(args.model_path, ref)
+    if rehearsal != (ref.get("reportable") is False) or (rehearsal and args.mode != "smoke"):
+        raise ValueError("A rehearsal model requires --rehearsal --mode smoke")
+    if rehearsal:
+        base_path = args.model_path if ref["kind"] == "base" else args.base_path
+        fixture = read_json(base_path / "config.json")
+        if (fixture.get("model_type") != "qwen3_vl" or fixture["text_config"]["num_hidden_layers"] != 2
+                or fixture["vision_config"]["depth"] != 3):
+            raise ValueError("Local rehearsal requires the reduced Qwen3-VL fixture")
+        if ref["kind"] == "unmerged-lora":
+            export = read_json(args.model_path / "export_manifest.json")
+            for name, checksum in export["base_files"].items():
+                if Path(name).name != name or sha256_file(base_path / name) != checksum:
+                    raise ValueError(f"Rehearsal base file mismatch: {name}")
+    elif ref["kind"] == "base" and ref["files"] != base["files"]:
+        raise ValueError("Baseline file inventory must match the pinned official model")
+    elif ref["kind"] != "base":
+        verify_model(args.base_path, base)
+    return ref, base
 
 
 def validate_batch_outputs(requests, outputs):
@@ -72,8 +116,12 @@ def validate_batch_outputs(requests, outputs):
 
 
 def prepare_request(row, subject, artifact_root, run_dir, cfg):
-    sample, images, gold = separate_sample(row, subject)
-    messages = build_messages(sample, images, run_dir)
+    pro = cfg.get("dataset", {}).get("id") == "MMMU/MMMU_Pro"
+    splitter = mmmu_pro.separate_sample if pro else separate_sample
+    sample, images, gold = splitter(row, subject)
+    if len(images) > (7 if pro else 5):
+        raise ValueError("Image count exceeds the registered suite limit")
+    messages = (mmmu_pro.build_messages if pro else build_messages)(sample, images, run_dir)
     serialized = [{"role": "user", "content": []}]
     image_files = []
     for image in images:
@@ -125,24 +173,29 @@ def publish(public_root, run_dir, summary, environment, cfg, hw, identity):
 def run(args, cfg, hw, root):
     start = time.monotonic()
     commit = git_commit(root, args.require_commit)
+    model_manifest, base_manifest = _evaluation_model(args, root)
+    from mmdl.runtime.contracts import validate_profile_model
+    validate_profile_model(cfg, model_manifest["kind"])
+    rehearsal = getattr(args, "rehearsal", False)
+    pro = cfg["dataset"]["id"] == "MMMU/MMMU_Pro"
+    parity = None
+    if args.mode == "full" and (pro or model_manifest["kind"] == "unmerged-lora"):
+        from mmdl.evaluation.backend_parity import ensure_admission
+        parity = ensure_admission(args, cfg, hw, model_manifest)
     environment = collect_environment()
     if not environment["torch"].get("bf16_probe", {}).get("passed"):
         raise RuntimeError("Doctor BF16 probe failed")
     storage = check_storage([args.artifact_root, args.data_root], 4 * 1024**3)
     if not storage["sufficient"]:
         raise RuntimeError("Storage headroom is below the recorded reserve + run budget")
-    model_manifest = read_json(args.model_ref)
-    verify_model(args.model_path, model_manifest)
-    base_manifest = read_json(root / "manifests/models/baseline.json")
-    if model_manifest["kind"] != "base":
-        verify_model(args.base_path, base_manifest)
-    datasets, coverage = load_validation(args.data_root)
+    suite = "mmmu-pro" if pro else "mmmu-val"
+    datasets, coverage = (mmmu_pro.load_test if pro else load_validation)(args.data_root)
     lookup = {sid: (subject, index) for subject, dataset in datasets.items()
               for index, sid in enumerate(dataset["id"])}
     ids = sorted(lookup)
     if args.mode == "full":
         if cfg["status"] != "FROZEN" or args.subject or args.limit or args.sample_id:
-            raise ValueError("Full run requires frozen protocol and all 900 samples")
+            raise ValueError("Full run requires frozen protocol and the entire registered suite")
     else:
         if args.subject:
             ids = [sid for sid in ids if lookup[sid][0] == args.subject]
@@ -154,7 +207,12 @@ def run(args, cfg, hw, root):
             ids = ids[:args.limit]
         if not ids:
             raise ValueError("Empty smoke selection")
-    records = code_records(root)
+    if pro or model_manifest["kind"] != "base":
+        from fine_tuning.error_note.v17_eval import submission_order
+        ids = submission_order(ids)
+    coverage = coverage | {"submission_order_sha256": digest(ids),
+                           "seed_order_sha256": digest([sample_seed(cfg["generation"]["seed"], sid) for sid in ids])}
+    records = code_records(root, submission=pro or model_manifest["kind"] == "unmerged-lora")
     protocol_files = file_records(root, list((root / "prompts").glob("mmmu_*_v1.txt")) +
                                  [root / "src/mmdl/evaluation/prompt.py",
                                   root / "src/mmdl/evaluation/parsers.py",
@@ -166,6 +224,13 @@ def run(args, cfg, hw, root):
         ])
     if cfg["parser"] == "team-final-answer-v8":
         protocol_files += file_records(root, [root / "src/mmdl/evaluation/final_answer_parser_v8.py"])
+    if pro or model_manifest["kind"] != "base":
+        protocol_files += file_records(root, [
+            root / "src/mmdl/evaluation/datasets/mmmu.py",
+            root / "src/mmdl/evaluation/datasets/mmmu_pro.py",
+            root / "src/mmdl/evaluation/backends/vllm_backend.py",
+            root / "fine_tuning/error_note/v17_eval.py",
+        ])
     data_manifest = read_json(args.data_root / "manifest.json")
     processor_files = [item for item in base_manifest["files"] if not item["path"].endswith(".safetensors")]
     protocol_hash = digest(dict(config=cfg, files=protocol_files, processor=processor_files,
@@ -174,6 +239,15 @@ def run(args, cfg, hw, root):
                     code_sha256=digest(records), environment_sha256=digest(environment_identity(environment)),
                     hardware=hw, ids_sha256=digest(ids), mode=args.mode,
                     git_commit=commit, job_id=args.job_id, run_role=args.run_role)
+    if pro:
+        identity.update(suite=suite, id_subjects={sid: lookup[sid][0] for sid in ids},
+                        subject_counts=coverage["subject_counts"],
+                        submission_order_sha256=digest(ids), seed_order_sha256=coverage["seed_order_sha256"])
+    if rehearsal:
+        identity["reportable"] = False
+        identity["rehearsal"] = True
+    if parity:
+        identity["engine_validation_sha256"] = parity["sha256"]
     run_dir = args.artifact_root / "runs" / args.run_id
     writer = RunWriter(run_dir, identity, ids, resume=args.resume)
     try:
@@ -207,6 +281,9 @@ def run(args, cfg, hw, root):
                 reproduce += f" --require-commit {args.require_commit}"
             if args.job_id:
                 reproduce += f" --job-id {args.job_id} --run-role {args.run_role}"
+            if pro or model_manifest["kind"] == "unmerged-lora" or rehearsal:
+                import shlex
+                reproduce = shlex.join(["bash", "scripts/eval.sh", *sys.argv[1:]])
             write_json(run_dir / "command.json", {"actual_argv": sys.argv, "reproduce_command": reproduce})
         for name in ("mmmu_mcq_v1.txt", "mmmu_open_v1.txt"):
             target = run_dir / "prompts" / name
@@ -227,7 +304,8 @@ def run(args, cfg, hw, root):
             atomic_text(run_dir / "source.patch", patch)
         if cfg["execution"]["backend"] == "vllm":
             from mmdl.evaluation.backends.vllm_backend import VLLMBackend
-            backend = VLLMBackend(str(args.model_path), cfg, hw, model_manifest["kind"], str(args.base_path))
+            backend = VLLMBackend(str(args.model_path), cfg, hw, model_manifest["kind"], str(args.base_path),
+                                  **({"rehearsal": True} if rehearsal else {}))
         else:
             from mmdl.evaluation.backends.transformers_backend import TransformersBackend
             backend = TransformersBackend(str(args.model_path), cfg, hw, model_manifest["kind"],
@@ -333,6 +411,8 @@ def run(args, cfg, hw, root):
                           ended_at=datetime.now(timezone.utc).isoformat())
         write_json(invocation_path, invocation)
         summary = finalize(run_dir, ids, args.mode)
+        if rehearsal:
+            summary.update(reportable=False, rehearsal=True)
         summary.update(evaluation_seconds_this_invocation=time.monotonic() - evaluation_start,
                        model_load_seconds=backend.load_seconds,
                        total_seconds_this_invocation=time.monotonic() - start,

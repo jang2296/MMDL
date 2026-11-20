@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+import os
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -15,7 +18,7 @@ from transformers import AutoConfig, AutoProcessor
 
 from mmdl.evaluation.backends.input_preparation import prepare_protocol_inputs
 from mmdl.runtime.artifacts import digest
-from mmdl.runtime.contracts import MODEL_REVISION
+from mmdl.runtime.contracts import MODEL_REVISION, EXECUTION_PROFILES, SUBMISSION_PROFILES, validate_profile_model
 
 
 VLLM_VERSION = "0.11.0"
@@ -59,20 +62,63 @@ def _device_memory_used_bytes() -> int | None:
         return None
 
 
+def allocated_kv_capacity(engine: Any, version: str, *, max_model_len: int,
+                          slots: int, safety_fraction: float = .90) -> dict[str, Any]:
+    """Read the same live scheduler blocks as v17; reserve each complete context."""
+    if version != VLLM_VERSION or type(slots) is not int or slots < 1:
+        raise ValueError("Unsupported KV engine version or slot count")
+    try:
+        cache = engine.engine_core.engine_core.scheduler.kv_cache_config
+        sizes = {group.kv_cache_spec.block_size for group in cache.kv_cache_groups}
+        if len(sizes) != 1:
+            raise ValueError("Mixed KV block sizes")
+        block_size, blocks = sizes.pop(), cache.num_blocks
+    except (AttributeError, TypeError) as exc:
+        raise ValueError("Actual allocated KV block structure unavailable") from exc
+    if any(type(n) is not int or n < 1 for n in (blocks, block_size, max_model_len)):
+        raise ValueError("Invalid allocated KV capacity")
+    if not 0 < safety_fraction <= .90:
+        raise ValueError("KV safety fraction cannot exceed .90")
+    reserved = math.ceil(max_model_len / block_size) * block_size
+    tokens, required = blocks * block_size, slots * reserved
+    usable = math.floor(safety_fraction * tokens)
+    result = dict(version="submission-kv-v1", vllm_version=version, slots=slots,
+                  max_model_len=max_model_len, actual_blocks=blocks, block_size=block_size,
+                  actual_kv_token_capacity=tokens, usable_tokens=usable,
+                  reserved_per_request=reserved, required_tokens=required,
+                  safe_slots=usable // reserved, pass_=required <= usable)
+    result["pass"] = result.pop("pass_")
+    if not result["pass"]:
+        raise ValueError(f"Insufficient actual KV capacity: {required} > {usable}; re-register both arms")
+    return result
+
+
 class VLLMBackend:
     """Bounded vLLM inference with a separately frozen evaluation protocol."""
 
     def __init__(self, model_path: str, cfg: dict[str, Any], hw: dict[str, Any], kind: str = "base",
-                 base_path: str | None = None):
+                 base_path: str | None = None, *, rehearsal: bool = False):
         if hw["placement"] != "gpu_only":
             raise ValueError("vLLM accelerated protocol requires the GPU-only hardware profile")
-        if cfg["execution"]["backend"] != "vllm" or cfg["execution"]["batch_size"] not in (1, 2):
+        diagnostic = (cfg.get("protocol_id") == "input-recovery-v1"
+                      and cfg["generation"].get("max_new_tokens") == 8192)
+        submission = cfg.get("protocol_id") in SUBMISSION_PROFILES
+        if submission and not rehearsal:
+            validate_profile_model(cfg, kind)
+            if cfg["execution"] != EXECUTION_PROFILES[cfg["protocol_id"]]:
+                raise ValueError("Submission execution differs from its named fixed profile")
+        if kind == "unmerged-lora" and not (submission or rehearsal):
+            raise ValueError("Unmerged LoRA requires a named submission profile")
+        allowed_slots = tuple(range(1, 10)) if submission or rehearsal else ((2, 4, 8) if diagnostic else (1, 2))
+        if (cfg["execution"]["backend"] != "vllm"
+                or type(cfg["execution"]["batch_size"]) is not int
+                or cfg["execution"]["batch_size"] not in allowed_slots):
             raise ValueError("vLLM requires a validated protocol with one or two active requests")
         if kind == "adapter":
             raise ValueError("vLLM accelerated protocol does not load an unmerged adapter")
         if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
             raise RuntimeError("CUDA with native BF16 is required")
-        if kind in {"full", "merged"}:
+        if kind in {"full", "merged", "unmerged-lora"}:
             if base_path is None:
                 raise ValueError("Derived model requires its pinned base path")
             reference = AutoConfig.from_pretrained(base_path, local_files_only=True).to_dict()
@@ -83,6 +129,18 @@ class VLLMBackend:
         processor_path = model_path if kind == "base" else base_path
         assert processor_path is not None
         self.cfg = cfg
+        self.rehearsal = rehearsal
+        self.max_images_per_prompt = cfg["execution"].get("max_images_per_prompt", MAX_IMAGES_PER_PROMPT)
+        self.enforce_eager = cfg["execution"].get("enforce_eager", True)
+        self.gpu_memory_utilization = cfg["execution"].get("gpu_memory_utilization", .90)
+        self.capacity_receipt = None
+        self.observed_execution = None
+        if self.max_images_per_prompt not in (5, 7) or type(self.enforce_eager) is not bool:
+            raise ValueError("Only registered five/seven-image eager/graph profiles are allowed")
+        if submission or rehearsal or kind == "unmerged-lora":
+            os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
+            if os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] != "0":
+                raise ValueError("Submission validation and LoRA require an in-process vLLM engine")
         self.max_model_len = cfg["execution"].get("max_model_len", MAX_MODEL_LEN)
         self.batch_size = cfg["execution"]["batch_size"]
         self.mm_processor_kwargs: dict[str, Any] = {
@@ -113,23 +171,40 @@ class VLLMBackend:
         LLM, self._sampling_params_cls, self.vllm_version = _vllm()
         self._request_output_kind = _final_only_output_kind()
         start = time.monotonic()
-        self.llm = LLM(
+        engine_kwargs = dict(
             model=model_path,
             tokenizer=processor_path,
             dtype="bfloat16",
             tensor_parallel_size=1,
             max_num_seqs=self.batch_size,
             max_model_len=self.max_model_len,
-            gpu_memory_utilization=0.90,
+            gpu_memory_utilization=self.gpu_memory_utilization,
             quantization=None,
             generation_config="auto",
             mm_processor_kwargs=self.mm_processor_kwargs,
             enable_prefix_caching=False,
             async_scheduling=False,
-            enforce_eager=True,
-            limit_mm_per_prompt={"image": MAX_IMAGES_PER_PROMPT, "video": 0},
+            enforce_eager=self.enforce_eager,
+            limit_mm_per_prompt={"image": self.max_images_per_prompt, "video": 0},
             trust_remote_code=False,
         )
+        if submission or rehearsal:
+            engine_kwargs["logprobs_mode"] = "raw_logprobs"
+            engine_kwargs["disable_log_stats"] = False
+        if kind == "unmerged-lora":
+            from fine_tuning.notebook_rl.proof_eval import attach_lora, lora_llm
+            self.llm = lora_llm(LLM, engine_kwargs)
+            attach_lora(self, Path(model_path))
+        else:
+            self.llm = LLM(**engine_kwargs)
+        if submission or rehearsal:
+            self.capacity_receipt = allocated_kv_capacity(
+                self.llm.llm_engine, self.vllm_version, max_model_len=self.max_model_len,
+                slots=self.batch_size, safety_fraction=cfg["execution"].get("kv_safety_fraction", .90))
+        if submission and not rehearsal:
+            from fine_tuning.error_note.v17_eval_engine import observe_engine
+            self.observed_execution = observe_engine(
+                self, "eager" if self.enforce_eager else "cuda_graph", self.batch_size)
         self.engine_default_sampling_params = repr(self.llm.get_default_sampling_params())
         self.load_seconds = time.monotonic() - start
 
@@ -151,14 +226,17 @@ class VLLMBackend:
                 "async_scheduling": False,
                 "max_num_seqs": self.batch_size,
                 "max_model_len": self.max_model_len,
-                "gpu_memory_utilization": 0.90,
+                "gpu_memory_utilization": self.gpu_memory_utilization,
                 "prefix_caching": False,
                 "tensor_parallel_size": 1,
                 "quantization": None,
                 "generation_config": "auto",
                 "mm_processor_kwargs": self.mm_processor_kwargs,
-                "enforce_eager": True,
-                "limit_mm_per_prompt": {"image": MAX_IMAGES_PER_PROMPT, "video": 0},
+                "enforce_eager": self.enforce_eager,
+                "limit_mm_per_prompt": {"image": self.max_images_per_prompt, "video": 0},
+                "allocated_kv": self.capacity_receipt,
+                "observed_execution": self.observed_execution,
+                "rehearsal": self.rehearsal,
                 "timing_policy": "batch_wall_divided_by_size (legacy generate_batch); "
                                  "engine_step_wall_divided_by_active_requests (generate_stream)",
             },
@@ -192,11 +270,14 @@ class VLLMBackend:
         return self._sampling_params_cls(**values)
 
     def _prepare_request(self, request: dict[str, Any], *, final_only: bool) -> tuple[dict[str, Any], dict[str, Any], Any]:
+        if not 1 <= len(request["images"]) <= getattr(self, "max_images_per_prompt", MAX_IMAGES_PER_PROMPT):
+            raise ValueError("Request image count exceeds the registered suite limit")
         item, engine_images = prepare_protocol_inputs(
             self.processor, self.model_config, request["messages"], request["images"], self.cfg.get("image", {}))
         if item["input_tokens"] + self.cfg["generation"]["max_new_tokens"] > self.max_model_len:
             raise ValueError("Input plus max_new_tokens exceeds vLLM max_model_len; refusing truncation")
         prompt = {"prompt": item["chat_prompt"], "multi_modal_data": {"image": engine_images}}
+        item["passed_image_count"] = len(engine_images)
         return item, prompt, self._sampling_params(request["seed"], final_only=final_only)
 
     def _row(self, request: dict[str, Any], item: dict[str, Any], params: Any, output: Any,
@@ -219,6 +300,9 @@ class VLLMBackend:
             "generated_token_ids": token_ids,
             "generated_tokens": len(token_ids),
             "input_tokens": item["input_tokens"],
+            "source_image_count": len(request["images"]),
+            "passed_image_count": item.get("passed_image_count", len(request["images"])),
+            "lora_request_id": getattr(getattr(self, "lora_request", None), "lora_int_id", None),
             "image_grid_thw": item["image_grid_thw"],
             "input_tensors": item["input_tensors"],
             "input_tensors_scope": "pinned_cpu_processor_reference_only",
@@ -273,7 +357,7 @@ class VLLMBackend:
         ]
 
     def generate_stream(self, requests: Iterable[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-        """Continuously refill up to two vLLM slots, yielding only completed requests."""
+        """Continuously refill the validated slot count, yielding only completions."""
         iterator = iter(requests)
         active: dict[str, dict[str, Any]] = {}
         seen: set[str] = set()
@@ -304,6 +388,9 @@ class VLLMBackend:
         try:
             fill_slots()
             while active:
+                deadline_check = getattr(self, "_check_deadline", None)
+                if deadline_check is not None:
+                    deadline_check()
                 active_count = len(active)
                 step_start = time.monotonic()
                 outputs = engine.step()

@@ -1,0 +1,57 @@
+{
+ "version": "single-source-baseline-v10",
+ "source": "v9 main run blocks 0-54 (T1 program-gate rewards, policy during v9 training)",
+ "blocks": 55,
+ "rows_files_sha256": "6a75b374e92660efa9191dc930650061ebd1f74483047f5583e63619eec6d3bd",
+ "global_mean": 0.3002,
+ "sources": {
+  "hf-ai2d": {
+   "mean": 0.8947,
+   "n": 38
+  },
+  "hf-chartqa": {
+   "mean": 0.1902,
+   "n": 163
+  },
+  "hf-chebi-role": {
+   "mean": 0.1667,
+   "n": 12
+  },
+  "hf-clevr": {
+   "mean": -0.026,
+   "n": 77
+  },
+  "hf-geometry3k": {
+   "mean": 0.2929,
+   "n": 99
+  },
+  "hf-gvlqa": {
+   "mean": 0.3158,
+   "n": 38
+  },
+  "hf-mapqa": {
+   "mean": 0.0446,
+   "n": 112
+  },
+  "hf-nctcrc": {
+   "mean": 0.678,
+   "n": 59
+  },
+  "hf-plantvillage": {
+   "mean": 0.4286,
+   "n": 14
+  },
+  "hf-scienceqa": {
+   "mean": 0.7551,
+   "n": 147
+  },
+  "hf-slake": {
+   "mean": -0.2778,
+   "n": 54
+  },
+  "hf-ssmr": {
+   "mean": 0.1587,
+   "n": 63
+  }
+ }
+}

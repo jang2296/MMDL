@@ -1,4 +1,4 @@
-"""Acquire only pinned model files, MMMU validation, and archival MMMU-Pro 10-way."""
+"""Acquire pinned evaluation inputs without replacing existing acquisition receipts."""
 
 import argparse
 import os
@@ -58,21 +58,25 @@ def acquire(repo, revision, kind, filenames, cache, destination=None):
                 download_verify_seconds=time.monotonic() - start), snapshot
 
 
-def prepare(root, data_root, cache, artifact_root, include_pro=True):
+def prepare(root, data_root, cache, artifact_root, include_pro=True, *, suite=None):
+    if suite not in {None, "mmmu-val", "mmmu-pro"}:
+        raise ValueError("Unknown evaluation suite")
     cache.mkdir(parents=True, exist_ok=True)
     artifact_root.mkdir(parents=True, exist_ok=True)
     specs = [(MODEL_ID, MODEL_REVISION, "model", MODEL_FILES, None, "models/baseline.json")]
-    specs.append((DATA_ID, DATA_REVISION, "dataset",
-                  ["README.md"] + [f"{s}/validation-00000-of-00001.parquet" for s in SUBJECTS],
-                  data_root / "evaluation/mmmu", "datasets/mmmu.json"))
-    if include_pro:
+    if suite != "mmmu-pro":
+        specs.append((DATA_ID, DATA_REVISION, "dataset",
+                      ["README.md"] + [f"{s}/validation-00000-of-00001.parquet" for s in SUBJECTS],
+                      data_root / "evaluation/mmmu", "datasets/mmmu.json"))
+    if suite == "mmmu-pro" or (suite is None and include_pro):
         specs.append((PRO_ID, PRO_REVISION, "dataset", ["README.md"] +
                       [f"standard (10 options)/test-0000{i}-of-00002.parquet" for i in range(2)],
                       data_root / "evaluation/mmmu_pro", "datasets/mmmu_pro.json"))
     locations = {}
     for repo, revision, kind, files, destination, manifest in specs:
         result, snapshot = acquire(repo, revision, kind, files, cache, destination)
-        result["usage"] = "archive_only_no_inference" if repo == PRO_ID else "evaluation_only"
+        result["usage"] = ("archive_only_no_inference" if repo == PRO_ID and suite is None
+                           else "evaluation_only")
         result["storage"] = ("HF_HOME/hub/" + str(snapshot.relative_to(cache / "hub"))
                              if not destination else "MMDL_DATA_ROOT/" + str(destination.relative_to(data_root)))
         result["source"] = f"https://huggingface.co/{'datasets/' if kind == 'dataset' else ''}{repo}/tree/{revision}"
@@ -94,7 +98,12 @@ def prepare(root, data_root, cache, artifact_root, include_pro=True):
             if not existing.exists():
                 write_json(existing, result)
         locations[repo] = dict(snapshot=str(snapshot), data_root=str(destination) if destination else None)
-    write_json(artifact_root / "setup/locations.json", locations)
+    receipt_name = f"locations-{suite}.json" if suite else "locations.json"
+    receipt = artifact_root / "setup" / receipt_name
+    if receipt.exists() and read_json(receipt) != locations:
+        raise ValueError("Existing acquisition locations differ; use a new artifact root")
+    if not receipt.exists():
+        write_json(receipt, locations)
 
 
 def main():
@@ -102,10 +111,11 @@ def main():
     parser.add_argument("--data-root", type=Path, default=default_path("MMDL_DATA_ROOT", "mmdl-data"))
     parser.add_argument("--cache", type=Path, default=default_path("HF_HOME", "mmdl-cache/huggingface"))
     parser.add_argument("--artifact-root", type=Path, default=default_path("MMDL_ARTIFACT_ROOT", "mmdl-artifacts"))
-    parser.add_argument("--skip-pro", action="store_true", help="Skip archival acquisition only")
+    parser.add_argument("--skip-pro", action="store_true", help="Skip legacy archival acquisition")
+    parser.add_argument("--suite", choices=["mmmu-val", "mmmu-pro"], help="Acquire only this evaluation suite and base model")
     args = parser.parse_args()
     prepare(Path(__file__).resolve().parents[3], args.data_root, args.cache, args.artifact_root,
-            include_pro=not args.skip_pro)
+            include_pro=not args.skip_pro, suite=args.suite)
 
 
 if __name__ == "__main__":

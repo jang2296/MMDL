@@ -50,13 +50,30 @@ def load_validation(data_root):
                        "ordered_ids": sorted(ids)}
 
 
-def separate_sample(row, subject):
-    """Allowlist inference fields. Gold stays with the scoring caller."""
-    options = row["options"]
+def parse_options(options):
+    """Read source choice text without sorting or relabeling it."""
     if isinstance(options, str):
         options = ast.literal_eval(options)
     if not isinstance(options, list) or any(not isinstance(x, str) for x in options):
         raise ValueError("Options must be the original ordered list of strings")
+    return options
+
+
+def load_image(entry):
+    """Decode source bytes or a source path into the RGB image sent to the model."""
+    if entry.get("bytes") is not None:
+        image = PILImage.open(io.BytesIO(entry["bytes"]))
+    elif entry.get("path"):
+        image = PILImage.open(entry["path"])
+    else:
+        raise ValueError("Empty image data")
+    image.load()
+    return image.convert("RGB")
+
+
+def separate_sample(row, subject):
+    """Allowlist inference fields. Gold stays with the scoring caller."""
+    options = parse_options(row["options"])
     kind = row["question_type"]
     if kind == "multiple-choice" and not 2 <= len(options) <= 26:
         raise ValueError("Invalid multiple-choice option count")
@@ -76,14 +93,8 @@ def separate_sample(row, subject):
         entry = row.get(f"image_{index}")
         if entry is None:
             continue
-        if entry.get("bytes") is not None:
-            image = PILImage.open(io.BytesIO(entry["bytes"]))
-        elif entry.get("path"):
-            image = PILImage.open(entry["path"])
-        else:
-            raise ValueError("Empty image data")
-        image.load()
-        images.append(image.convert("RGB"))
+        image = load_image(entry)
+        images.append(image)
         references.append({"field": f"image_{index}", "marker": f"<image {index}>",
                            "content_index": len(images) - 1, "original_size": list(image.size)})
     if not images:

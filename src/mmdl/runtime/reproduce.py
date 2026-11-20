@@ -21,9 +21,12 @@ HARDWARE_PROFILES = {
     "rtx4090_24gb.yaml": (r"NVIDIA(?: GeForce)? RTX 4090", 23 * 1024**3),
     "rtx3090_24gb.yaml": (r"NVIDIA(?: GeForce)? RTX 3090", 23 * 1024**3),
     "rtx5090_32gb.yaml": (r"NVIDIA(?: GeForce)? RTX 5090", 31 * 1024**3),
+    "a100_sxm_80gb.yaml": (r"NVIDIA A100(?:-SXM4)?[- ]80GB", 79 * 1024**3),
+    "a100_pcie_80gb.yaml": (r"NVIDIA A100(?:-PCIE)?[- ]80GB", 79 * 1024**3),
 }
 _GPU_SAMPLE_INTERVAL_MS = 500
 _INFERENCE_STAGES = frozenset({"smoke", "evaluation"})
+_PRO_FULL_MIN_SECONDS = 20 * 60 * 60
 
 
 def arguments(argv=None):
@@ -31,19 +34,32 @@ def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=["evaluate"], default="evaluate")
     parser.add_argument("--target", choices=["runpod"], default="runpod")
-    parser.add_argument("--suite", choices=["mmmu-val"], default="mmmu-val")
+    parser.add_argument("--suite", choices=["mmmu-val", "mmmu-pro"], default="mmmu-val")
+    parser.add_argument("--model", choices=["base", "finetuned"], default="base")
+    parser.add_argument("--score", choices=["v8", "both"], default="v8")
+    parser.add_argument("--engine-validation", type=Path)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--protocol", type=Path, default=root / "configs/eval/mmmu_val_v8.yaml")
     parser.add_argument("--hardware", type=Path, default=root / "configs/hardware/rtx4090_24gb.yaml")
     parser.add_argument("--model-ref", type=Path, default=root / "manifests/models/baseline.json")
-    parser.add_argument("--model-path", default=os.environ.get("MMDL_MODEL_PATH", "Qwen/Qwen3-VL-4B-Instruct"))
+    parser.add_argument("--model-path")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--prepare-only", action="store_true",
                         help="Install, probe and download only; no smoke or full inference")
     args = parser.parse_args(argv)
+    if args.model_path is None and args.model == "base":
+        args.model_path = os.environ.get("MMDL_MODEL_PATH", "Qwen/Qwen3-VL-4B-Instruct")
+    if args.suite == "mmmu-pro" or args.model == "finetuned":
+        profile = "4090" if "24gb" in args.hardware.name else "a100"
+        if args.protocol == root / "configs/eval/mmmu_val_v8.yaml":
+            name = (f"mmmu_pro_standard10_v8_{profile}.yaml" if args.suite == "mmmu-pro"
+                    else f"mmmu_val_v18b_ft_{profile}.yaml")
+            args.protocol = root / "configs/eval" / name
+        if args.model == "finetuned" and args.model_ref == root / "manifests/models/baseline.json":
+            args.model_ref = root / "manifests/models/v18b.json"
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,60}", args.job_id):
         parser.error("Invalid job ID")
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
@@ -104,7 +120,7 @@ def _validate_origin(origin):
 def _validate_hardware_profile(hardware):
     profile = Path(hardware).name
     if profile not in HARDWARE_PROFILES:
-        raise ValueError("Only the approved RTX 3090, RTX 4090, or RTX 5090 hardware profile is allowed")
+        raise ValueError("Only registered RTX or A100 hardware profiles are allowed")
     return profile
 
 
@@ -136,11 +152,33 @@ def _protocol_backend(protocol):
     return backend
 
 
-def _lock_path(root, backend):
-    path = root / "env" / ("requirements-vllm.lock" if backend == "vllm" else "requirements-eval.lock")
+def _lock_path(root, backend, submission=False):
+    path = root / "env" / ("requirements-proof.lock" if submission else
+                            "requirements-vllm.lock" if backend == "vllm" else "requirements-eval.lock")
     if not path.is_file():
         raise FileNotFoundError(f"Missing exact dependency lock for {backend}: {path}")
     return path
+
+
+def _lock_receipt(lock):
+    receipt: dict[str, object] = {"lock_sha256": sha256_file(lock)}
+    if lock.name == "requirements-proof.lock":
+        receipt["included_locks_sha256"] = {
+            "requirements-vllm.lock": sha256_file(lock.parent / "requirements-vllm.lock")}
+    return receipt
+
+
+def _environment_commands(root, lock, python, submission):
+    if submission:
+        pip = ["uv", "pip"]
+        return {"venv": ["uv", "venv", "--python", sys.executable, python.parent.parent],
+                "install": [*pip, "install", "--python", python, "--index-strategy", "unsafe-best-match", "-r", lock],
+                "package": [*pip, "install", "--python", python, "--no-deps", "-e", root],
+                "pip-check": [*pip, "check", "--python", python]}
+    return {"venv": [sys.executable, "-m", "venv", python.parent.parent],
+            "install": [python, "-m", "pip", "install", "-r", lock],
+            "package": [python, "-m", "pip", "install", "--no-deps", "-e", root],
+            "pip-check": [python, "-m", "pip", "check"]}
 
 
 def _preflight_gpu(hardware):
@@ -211,22 +249,131 @@ def _gpu_sample_metrics(path, diagnostic=None):
     }
 
 
+def _full_run_deadline(args, deadline=None):
+    """Reject a short explicit safety deadline; never extend or waive it."""
+    if args.suite != "mmmu-pro" or args.prepare_only:
+        return deadline
+    configured = os.environ.get("MMDL_STOP_DEADLINE_UTC")
+    if deadline is None and configured:
+        deadline = datetime.fromisoformat(configured.replace("Z", "+00:00"))
+    if deadline is not None:
+        if deadline.tzinfo is None:
+            raise ValueError("MMMU-Pro stop deadline must include a timezone")
+        remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+        if remaining < _PRO_FULL_MIN_SECONDS:
+            raise ValueError("MMMU-Pro FULL requires at least 20 hours before an explicit stop deadline; "
+                             "the shorter safety deadline is preserved. Resolve this clash before allocating a Pod")
+    return deadline
+
+
+def _evaluation_commands(args, backend, data, artifacts, public):
+    common = ["bash", "scripts/eval.sh", "--protocol", args.protocol, "--hardware", args.hardware,
+              "--suite", args.suite, "--model", args.model,
+              "--model-ref", args.model_ref, "--data-root", data,
+              "--artifact-root", artifacts, "--public-root", public, "--require-commit", args.commit,
+              "--job-id", args.job_id]
+    if args.engine_validation:
+        common += ["--engine-validation", args.engine_validation]
+    if args.model_path:
+        common += ["--model-path", args.model_path]
+    roles = ("smoke", "evaluation") if args.suite == "mmmu-val" and args.model == "base" else ("evaluation",)
+    commands = []
+    for role in roles:
+        score = args.score if role == "evaluation" else "v8"
+        command = common + ["--run-id", f"{args.job_id}-{role}", "--run-role", role,
+                            "--mode", "smoke" if role == "smoke" else "full", "--score", score]
+        if score != "both":
+            command += ["--no-download"]
+        if role == "smoke":
+            for sample_id in _smoke_sample_ids(backend, args.protocol):
+                command += ["--sample-id", sample_id]
+        commands.append((role, command))
+    return commands
+
+
+def _verification_commands(args, python, artifacts, public):
+    run_id = f"{args.job_id}-evaluation"
+    return [("evaluation-rescore", ["bash", "scripts/rescore.sh", "--artifact-root", artifacts,
+                                   "--run-id", run_id, "--suite", args.suite, "--verify"]),
+            ("evaluation-audit", [python, "scripts/validate_run.py", "--run-dir", artifacts / "runs" / run_id,
+                                  "--public-dir", public / run_id])]
+
+
+def _operator_plan(args, root):
+    from mmdl.runtime.artifacts import default_path
+    from mmdl.runtime.contracts import load_configs
+
+    deadline = _full_run_deadline(args)
+    cfg, _ = load_configs(args.protocol, args.hardware)
+    expected_suite = "mmmu-pro" if cfg["dataset"]["id"] == "MMMU/MMMU_Pro" else "mmmu-val"
+    if args.suite != expected_suite or cfg["status"] != "FROZEN":
+        raise ValueError("Selected suite requires its matching frozen protocol")
+    artifacts = default_path("MMDL_ARTIFACT_ROOT", "mmdl-artifacts")
+    cache = default_path("HF_HOME", "mmdl-cache/huggingface")
+    data_root = default_path("MMDL_DATA_ROOT", "mmdl-data")
+    data = args.data_root or data_root / ("evaluation/mmmu_pro" if args.suite == "mmmu-pro" else "evaluation/mmmu")
+    python = default_path("MMDL_VENV_ROOT", "mmdl-envs/eval") / "bin/python"
+    submission = args.suite == "mmmu-pro" or args.model == "finetuned" or args.score == "both"
+    lock = _lock_path(root, cfg["execution"]["backend"], submission)
+    download = [python, "-m", "mmdl.data.download", "--data-root", data_root, "--cache", cache,
+                "--artifact-root", artifacts, "--suite", args.suite]
+    commands = [("download", download)]
+    if not args.prepare_only:
+        commands += _evaluation_commands(args, cfg["execution"]["backend"], data, artifacts, artifacts / "public")
+        commands += _verification_commands(args, python, artifacts, artifacts / "public")
+    return {
+        "source": {"required_origin": "https://github.com/jang2296/MMDL", "commit": args.commit,
+                   "verification": "clean fixed-commit checkout checked at execution"},
+        "model": args.model, "model_ref": str(args.model_ref), "score": args.score,
+        "protocol": str(args.protocol), "protocol_id": cfg["protocol_id"],
+        "protocol_sha256": sha256_file(args.protocol), "hardware": str(args.hardware),
+        "lock": str(lock), "lock_receipt": _lock_receipt(lock),
+        "environment": {"manager": "uv" if submission else "pip", "bootstrap_python": sys.executable,
+                        "job_python": str(python), "commands": {
+                            role: list(map(str, command)) for role, command in
+                            _environment_commands(root, lock, python, submission).items()}},
+        "enrollment": None if args.prepare_only else {
+            "mode": "FULL", "expected_total": cfg["dataset"]["expected_total"],
+            "run_id": f"{args.job_id}-evaluation", "one_response_per_sample": True},
+        "profile": {"model": cfg["model"], "dataset": cfg["dataset"],
+                    "generation": cfg["generation"], "image": cfg["image"], "execution": cfg["execution"]},
+        "time_limits": {"chain_timeout_seconds": None, "full_stage_timeout_seconds": None,
+                        "subprocess_timeout_seconds": None,
+                        "minimum_full_window_seconds": _PRO_FULL_MIN_SECONDS if args.suite == "mmmu-pro" and not args.prepare_only else None,
+                        "stop_deadline_utc": deadline.isoformat() if deadline else None,
+                        "explicit_safety_deadline_preserved": True,
+                        "external_watchdog_required": os.environ.get("MMDL_COST_POLICY") != "user_waived" or deadline is not None},
+        "commands": [{"stage": role, "argv": list(map(str, command)), "timeout_seconds": None}
+                     for role, command in commands],
+        "scoring": {"parser": cfg["parser"], "supplemental": "official pinned CompassVerifier-7B on saved responses" if args.score == "both" else None,
+                    "log_pattern": str(artifacts / "jobs" / f"{args.job_id}.*-evaluation.log")},
+        "acquisition": "pinned public model and dataset downloaded on this Pod; FT checkpoint restored separately",
+    }
+
+
 def execute(args, root):
     _validate_hardware_profile(args.hardware)
     backend = _protocol_backend(args.protocol)
-    lock = _lock_path(root, backend)
+    submission = args.suite == "mmmu-pro" or args.model == "finetuned" or args.score == "both"
+    lock = _lock_path(root, backend, submission)
+    lock_receipt = _lock_receipt(lock)
     git_commit(root, args.commit)
     origin = subprocess.check_output(["git", "remote", "get-url", "origin"], cwd=root, text=True).strip()
     _validate_origin(origin)
     paths, deadline, budget = require_runtime(root)
+    deadline = _full_run_deadline(args, deadline)
+    if deadline is not None and not os.environ.get("MMDL_WATCHDOG_ID"):
+        raise ValueError("An armed external watchdog is required for an explicit stop deadline")
     artifacts, venv = paths["MMDL_ARTIFACT_ROOT"], paths["MMDL_VENV_ROOT"]
-    data = args.data_root.resolve() if args.data_root else paths["MMDL_DATA_ROOT"] / "evaluation/mmmu"
+    data = args.data_root.resolve() if args.data_root else paths["MMDL_DATA_ROOT"] / (
+        "evaluation/mmmu_pro" if args.suite == "mmmu-pro" else "evaluation/mmmu")
     if not data.is_relative_to(paths["MMDL_DATA_ROOT"]):
         raise ValueError("Selected evaluation data must be under MMDL_DATA_ROOT")
     public = artifacts / "public"
     job_file = artifacts / "jobs" / f"{args.job_id}.json"
     binding = {"schema_version": 2, "job_id": args.job_id, "pod_id": os.environ["RUNPOD_POD_ID"], "git_commit": args.commit,
-               "suite": args.suite, "backend": backend, "lock_sha256": sha256_file(lock),
+               "suite": args.suite, "backend": backend, **lock_receipt,
+               "model": args.model, "score": args.score, "model_ref_sha256": sha256_file(args.model_ref),
                "protocol_sha256": sha256_file(args.protocol),
                "hardware": Path(args.hardware).name, "hardware_sha256": sha256_file(args.hardware),
                "prepare_only": args.prepare_only,
@@ -307,18 +454,19 @@ def execute(args, root):
 
     python = venv / "bin/python"
     venv_receipt = venv / "mmdl-lock.json"
+    environment_commands = _environment_commands(root, lock, python, submission)
     try:
         job["preflight"] = _preflight_gpu(args.hardware)
         write_json(job_file, job)
         if venv.exists():
-            if not venv_receipt.is_file() or read_json(venv_receipt) != {"lock_sha256": binding["lock_sha256"]}:
+            if not venv_receipt.is_file() or read_json(venv_receipt) != lock_receipt:
                 raise ValueError("Refusing to modify an unmanaged or different-lock venv")
         else:
-            stage("venv", [sys.executable, "-m", "venv", venv])
-            stage("install", [python, "-m", "pip", "install", "-r", lock])
-            write_json(venv_receipt, {"lock_sha256": binding["lock_sha256"]})
-        stage("package", [python, "-m", "pip", "install", "--no-deps", "-e", root])
-        stage("pip-check", [python, "-m", "pip", "check"])
+            stage("venv", environment_commands["venv"])
+            stage("install", environment_commands["install"])
+            write_json(venv_receipt, lock_receipt)
+        stage("package", environment_commands["package"])
+        stage("pip-check", environment_commands["pip-check"])
         stage("config", [python, "-c", "import sys; from pathlib import Path; from mmdl.runtime.contracts import load_configs; c,h=load_configs(Path(sys.argv[1]),Path(sys.argv[2])); sys.exit(0 if c['status']=='FROZEN' and h['placement']=='gpu_only' else 'Frozen GPU-only protocol required')", args.protocol, args.hardware])
         env["MMDL_PYTHON"] = str(python)
         stage("doctor", ["bash", "scripts/doctor.sh", "--output", artifacts / "jobs" / f"{args.job_id}.doctor.json",
@@ -326,31 +474,21 @@ def execute(args, root):
                           "--storage-path", artifacts, "--required-gib", "28"])
         _validate_doctor_gpu(artifacts / "jobs" / f"{args.job_id}.doctor.json", args.hardware)
         stage("download", [python, "-m", "mmdl.data.download", "--data-root", paths["MMDL_DATA_ROOT"],
-                            "--cache", paths["HF_HOME"], "--artifact-root", artifacts, "--skip-pro"])
+                            "--cache", paths["HF_HOME"], "--artifact-root", artifacts,
+                            "--suite", args.suite])
         if args.prepare_only:
             job.update(status="PREPARED", logs_closed=True, ended_at=datetime.now(timezone.utc).isoformat())
             write_json(job_file, job)
             return
-        common = ["bash", "scripts/eval.sh", "--protocol", args.protocol, "--hardware", args.hardware,
-                  "--model-ref", args.model_ref, "--model-path", args.model_path, "--data-root", data,
-                  "--artifact-root", artifacts, "--public-root", public, "--require-commit", args.commit,
-                  "--job-id", args.job_id, "--no-download"]
-        for role in ("smoke", "evaluation"):
+        for role, command in _evaluation_commands(args, backend, data, artifacts, public):
             run_id = f"{args.job_id}-{role}"
-            command = common + ["--run-id", run_id, "--run-role", role, "--mode", "smoke" if role == "smoke" else "full"]
-            if role == "smoke":
-                for sample_id in _smoke_sample_ids(backend, args.protocol):
-                    command += ["--sample-id", sample_id]
             if (artifacts / "runs" / run_id).exists():
                 if not args.resume:
                     raise ValueError("Existing run requires explicit --resume")
                 command += ["--resume"]
             stage(role, command)
-            if role != "smoke":
-                stage(f"{role}-rescore", ["bash", "scripts/rescore.sh", "--artifact-root", artifacts,
-                                           "--run-id", run_id, "--verify"])
-                stage(f"{role}-audit", [python, "scripts/validate_run.py", "--run-dir", artifacts / "runs" / run_id,
-                                         "--public-dir", public / run_id])
+        for role, command in _verification_commands(args, python, artifacts, public):
+            stage(role, command)
         git_commit(root, args.commit)
         job.update(status="REMOTE_VERIFIED", logs_closed=True, ended_at=datetime.now(timezone.utc).isoformat())
         write_json(job_file, job)
@@ -367,12 +505,16 @@ def execute(args, root):
 def main(argv=None):
     args = arguments(argv)
     if not args.execute:
+        plan = _operator_plan(args, Path(__file__).resolve().parents[3])
         print(json.dumps({"status": "DRY_RUN", "job_id": args.job_id, "commit": args.commit,
                           "suite": args.suite,
                           "prepare_only": args.prepare_only,
                           "steps": ["clean GitHub checkout", "exact-lock venv", "doctor", "pinned download"] +
-                                   ([] if args.prepare_only else ["one smoke", "one evaluation (900 samples)", "verify and bundle"]),
-                          "external_gate": "persistent volume; strict approved budget and STOP watchdog, or explicit user_waived cost policy"}))
+                                   ([] if args.prepare_only else (
+                                       (["one smoke"] if args.suite == "mmmu-val" and args.model == "base" else [])
+                                       + [f"one evaluation ({1730 if args.suite == 'mmmu-pro' else 900} samples)", "verify and bundle"])),
+                          "external_gate": "persistent volume; strict approved budget and STOP watchdog, or explicit user_waived cost policy",
+                          "plan": plan}))
         return
     execute(args, Path(__file__).resolve().parents[3])
 
