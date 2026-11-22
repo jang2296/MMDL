@@ -266,21 +266,36 @@ class MMMUTestSuiteTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "mapping mismatch"):
                 finalize(Path(temp) / "wrong", ["validation_Math_2"], "smoke")
 
-    def test_cli_and_operator_defaults_select_the_test_protocol_and_v8_only(self):
+    def test_cli_and_operator_defaults_select_the_test_protocol_and_supplemental_scoring(self):
         from mmdl.evaluation import cli
 
         _, args = cli.arguments(["--suite", "mmmu-test", "--model", "finetuned", "--run-id", "t"])
-        self.assertEqual(args.protocol.name, "mmmu_test_lowres2k_v8.yaml")
+        self.assertEqual((args.protocol.name, args.score), ("mmmu_test_lowres2k_v8.yaml", "v8"))
         self.assertEqual(args.data_root.parts[-2:], ("evaluation", "mmmu_test"))
-        plan = reproduce.arguments(["--suite", "mmmu-test", "--model", "finetuned", "--job-id", "t",
-                                    "--commit", "0" * 40])
+        _, args = cli.arguments(["--suite", "mmmu-test", "--score", "both", "--run-id", "t"])
+        self.assertEqual(args.score, "both")
+        hardware = ROOT / "configs/hardware/a100_pcie_80gb.yaml"
+        plan = reproduce.arguments(["--suite", "mmmu-test", "--model", "finetuned", "--score", "both",
+                                    "--hardware", str(hardware), "--job-id", "t", "--commit", "0" * 40])
         self.assertEqual((plan.protocol.name, plan.model_ref.name), ("mmmu_test_lowres2k_v8.yaml", "v18b.json"))
-        with patch("sys.stderr"):
-            for parse in (lambda: cli.arguments(["--suite", "mmmu-test", "--score", "both", "--run-id", "t"]),
-                          lambda: reproduce.arguments(["--suite", "mmmu-test", "--score", "both", "--job-id", "t",
-                                                       "--commit", "0" * 40])):
-                with self.assertRaises(SystemExit):
-                    parse()
+        operator = reproduce._operator_plan(plan, ROOT)
+        self.assertIn("CompassVerifier-7B", operator["scoring"]["supplemental"])
+        evaluation = next(c["argv"] for c in operator["commands"] if c["stage"] == "evaluation")
+        self.assertEqual(evaluation[evaluation.index("--score") + 1], "both")
+
+    def test_a100_pcie_profile_matches_real_device_names(self):
+        import re
+
+        pattern = reproduce.HARDWARE_PROFILES["a100_pcie_80gb.yaml"][0]
+        for name in ("NVIDIA A100 80GB PCIe", "NVIDIA A100-PCIE-80GB"):
+            self.assertTrue(re.fullmatch(pattern, name, re.IGNORECASE), name)
+        self.assertIsNone(re.fullmatch(reproduce.HARDWARE_PROFILES["a100_sxm_80gb.yaml"][0],
+                                       "NVIDIA A100 80GB PCIe", re.IGNORECASE))
+        cfg, hw = contracts.load_configs(ROOT / "configs/eval/mmmu_test_lowres2k_v8.yaml",
+                                         ROOT / "configs/hardware/a100_pcie_80gb.yaml")
+        self.assertEqual(hw["name"], "a100_pcie_80gb")
+        contracts.load_configs(ROOT / "configs/eval/mmmu_pro_standard10_v8_a100.yaml",
+                               ROOT / "configs/hardware/a100_pcie_80gb.yaml")
 
     def test_bounded_rehearsal_canonicalizes_to_the_registered_profile(self):
         import yaml

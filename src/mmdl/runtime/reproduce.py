@@ -22,7 +22,7 @@ HARDWARE_PROFILES = {
     "rtx3090_24gb.yaml": (r"NVIDIA(?: GeForce)? RTX 3090", 23 * 1024**3),
     "rtx5090_32gb.yaml": (r"NVIDIA(?: GeForce)? RTX 5090", 31 * 1024**3),
     "a100_sxm_80gb.yaml": (r"NVIDIA A100(?:-SXM4)?[- ]80GB", 79 * 1024**3),
-    "a100_pcie_80gb.yaml": (r"NVIDIA A100(?:-PCIE)?[- ]80GB", 79 * 1024**3),
+    "a100_pcie_80gb.yaml": (r"NVIDIA A100(?:-PCIE)?[- ]80GB(?: PCIe)?", 79 * 1024**3),
 }
 _GPU_SAMPLE_INTERVAL_MS = 500
 _INFERENCE_STAGES = frozenset({"smoke", "evaluation"})
@@ -56,8 +56,6 @@ def arguments(argv=None):
     args = parser.parse_args(argv)
     if args.model_path is None and args.model == "base":
         args.model_path = os.environ.get("MMDL_MODEL_PATH", "Qwen/Qwen3-VL-4B-Instruct")
-    if args.suite == "mmmu-test" and args.score != "v8":
-        parser.error("MMMU test is scored with V8 only; --score both is not registered")
     if args.suite == "mmmu-test" and args.protocol == root / "configs/eval/mmmu_val_v8.yaml":
         args.protocol = root / "configs/eval/mmmu_test_lowres2k_v8.yaml"
     if args.suite != "mmmu-val" or args.model == "finetuned":

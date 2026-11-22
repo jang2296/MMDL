@@ -61,8 +61,6 @@ def arguments(argv=None):
     args = parser.parse_args(argv)
     if args.score_only and args.score != "both":
         parser.error("--score-only requires --score both")
-    if args.suite == "mmmu-test" and args.score != "v8":
-        parser.error("MMMU test is scored with V8 only; supplemental --score both is not registered")
     if args.rehearsal:
         if args.mode != "smoke" or not all((args.protocol, args.model_ref, args.model_path, args.data_root)):
             parser.error("--rehearsal requires smoke mode and explicit protocol/model-ref/model-path/data-root")
@@ -315,8 +313,6 @@ def rescore_main(argv=None):
         parser.error("Invalid run ID")
     if args.score == "both" and args.checker_run is None:
         parser.error("Saved-response --score both requires --checker-run; no judge is started by rescore")
-    if args.suite == "mmmu-test" and args.score != "v8":
-        parser.error("MMMU test is scored with V8 only")
     source = args.source_run or args.artifact_root / "runs" / args.run_id
     source_cfg = yaml.safe_load((source / "resolved_eval_config.yaml").read_text())
     parser_id = args.parser or ("team-final-answer-v8" if args.score == "both" else source_cfg["parser"])

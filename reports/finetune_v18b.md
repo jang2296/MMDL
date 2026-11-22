@@ -68,10 +68,10 @@ bash scripts/reproduce.sh --suite mmmu-pro --model finetuned --score both --hard
 
 ## MMMU test (10,500, 저해상도·2,048토큰)
 
-| 시험과 모델 | V8 |
-|---|---:|
-| MMMU test · Qwen 원본 | 미측정 |
-| MMMU test · v18b, 최종 slot 206 | 미측정 |
+| 시험과 모델 | V8 | V8 + CompassVerifier-7B |
+|---|---:|---:|
+| MMMU test · Qwen 원본 | 미측정 | 미측정 |
+| MMMU test · v18b, 최종 slot 206 | 미측정 | 미측정 |
 
 MMMU test 10,500문항은 validation의 약 11.7배다. B2 조건(고해상도 1,003,520–4,014,080픽셀, 출력 32,768토큰)으로는 시간과 비용이 지나치게 커서 별도로 고정한 프로토콜 `mmmu-test-lowres2k-v8-v1`(`configs/eval/mmmu_test_lowres2k_v8.yaml`)을 쓴다. 이 점수는 그림 해상도·출력 상한·문항 집합이 다르므로 위 validation·Pro 점수와 비교하지 않는다. 출력이 2,048토큰에서 잘린 문항은 오답으로 남는다.
 
@@ -82,20 +82,20 @@ MMMU test 10,500문항은 validation의 약 11.7배다. B2 조건(고해상도 1
 - 그림: 문항의 그림 1–7장을 원래 순서대로 넣는다. `qwen_vl_utils` 0.0.14로 한 번만 262,144–1,310,720픽셀로 조정한다(control-b와 같은 저해상도 설정).
 - 생성: P0 프롬프트, B2 샘플링(temperature 0.7, top-p 0.8, top-k 20, repetition 1.0, presence 1.5), 문항별 seed(마스터 3407, SHA256 규칙), 문항당 한 번의 답, 출력 상한 2,048토큰, 문맥 한도 16,384.
 - 동시 처리: vLLM 연속 처리. 엔진 시작 후 실제 KV 블록 수를 읽고 `floor(0.9 × 실제 KV 토큰 용량)`을 사용 가능량으로 정한다. 정해진 문항 순서대로, 실행 중인 요청 수가 64 미만이고 실행 중 요청들의 `ceil((입력 토큰 + 2,048) / 블록 크기) × 블록 크기` 합에 다음 요청을 더해도 사용 가능량 이하일 때만 다음 요청을 넣는다. 들어가지 못한 요청은 앞 요청이 끝날 때까지 기다리며 뒤 요청이 앞지르지 않는다. 각 요청의 최대 문맥을 미리 확보하므로 KV 선점이 생기지 않는다. 관측한 최대·평균 동시 요청 수는 `summary.json`의 `kv_admission_this_invocation`에 기록한다.
-- 채점: V8(`team-final-answer-v8`)만 사용한다. CompassVerifier 보완 판정은 이 프로토콜에 등록하지 않았다. 공식 정답 파일이 허용 답 목록으로 준 주관식 32문항은 목록 중 하나와 일치하면 정답으로 본다(validation 3문항은 기존 V8 결과 그대로 문자열 정답으로 채점했다).
-- 정답 출처: 공식 MMMU 저장소 commit `bc168a9119d986d7cdf1e07b1eeb96ed3e8f92fa`의 `mmmu/answer_dict_test.json`(1,144,122바이트, SHA256 `45b639a937017d3d71f81f610df3a1471debe1887c5c1d24644fec1b33059d5c`). 취득 시 해시가 다르면 멈춘다. 평가기는 parquet의 정답 10,500개를 이 파일과 모두 대조하고 하나라도 다르면 시작하지 않는다. 정답은 생성 뒤 채점에만 쓰며 모델 입력에는 넣지 않는다. 공식 정답이 목록인 주관식 32문항은 validation과 같이 parquet에 저장된 문자열 형태 그대로 V8로 채점한다.
+- 채점: 과제 점수는 V8(`team-final-answer-v8`)이다. validation·Pro와 같은 CompassVerifier-7B 보완 판정을 같은 응답에 따로 적용해 별도 점수로 보고한다. 보완 판정은 정상 종료(stop)한 V8 오답 중 답을 추출하지 못한 문항과 주관식 불일치 문항만 확인하며 오답→정답 방향으로만 바꾼다. 원래 V8 기록은 바꾸지 않는다. 공식 정답 파일이 허용 답 목록으로 준 주관식 32문항은 목록 중 하나와 일치하면 정답으로 본다(validation 3문항은 기존 V8 결과 그대로 문자열 정답으로 채점했다).
+- 정답 출처: 공식 MMMU 저장소 commit `bc168a9119d986d7cdf1e07b1eeb96ed3e8f92fa`의 `mmmu/answer_dict_test.json`(1,144,122바이트, SHA256 `45b639a937017d3d71f81f610df3a1471debe1887c5c1d24644fec1b33059d5c`). 취득 시 해시가 다르면 멈춘다. 평가기는 parquet의 정답 10,500개를 이 파일과 모두 대조하고 하나라도 다르면 시작하지 않는다. 정답은 생성 뒤 채점에만 쓰며 모델 입력에는 넣지 않는다.
 
 지정 프로세서로 10,500문항 전체 입력을 CPU에서 확인했다. 최대 입력은 4,588토큰(`test_Biology_52`), 평균 588.3토큰, 99분위 1,627토큰, 그림은 최대 7장이었다. 최대 입력에 출력 상한을 더한 6,636토큰은 문맥 한도 16,384 안에 든다. 첫 전체 실행은 Pro와 같이 기준 엔진과 제출 엔진을 비벤치마크 입력으로 먼저 비교한다. 이때 최대 픽셀 그림 7장과 출력 2,048토큰이 문맥 한도에 들어가는지도 확인한다.
 
 ```bash
 PYTHONPATH=src "$MMDL_PYTHON" -m mmdl.data.download --suite mmmu-test --data-root "$MMDL_DATA_ROOT" --cache "$HF_HOME" --artifact-root "$MMDL_ARTIFACT_ROOT"
-bash scripts/eval.sh --suite mmmu-test --model base --hardware configs/hardware/a100_sxm_80gb.yaml --run-id test-base
-bash scripts/eval_finetuned.sh --suite mmmu-test --hardware configs/hardware/a100_sxm_80gb.yaml --run-id test-v18b
-bash scripts/reproduce.sh --suite mmmu-test --model base --hardware configs/hardware/a100_sxm_80gb.yaml --job-id test-base-3407 --commit "$MMDL_CODE_COMMIT"
-bash scripts/reproduce.sh --suite mmmu-test --model finetuned --hardware configs/hardware/a100_sxm_80gb.yaml --job-id test-v18b-3407 --commit "$MMDL_CODE_COMMIT"
+bash scripts/eval.sh --suite mmmu-test --model base --score both --hardware configs/hardware/a100_pcie_80gb.yaml --run-id test-base
+bash scripts/eval_finetuned.sh --suite mmmu-test --score both --hardware configs/hardware/a100_pcie_80gb.yaml --run-id test-v18b
+bash scripts/reproduce.sh --suite mmmu-test --model base --score both --hardware configs/hardware/a100_pcie_80gb.yaml --job-id test-base-3407 --commit "$MMDL_CODE_COMMIT"
+bash scripts/reproduce.sh --suite mmmu-test --model finetuned --score both --hardware configs/hardware/a100_pcie_80gb.yaml --job-id test-v18b-3407 --commit "$MMDL_CODE_COMMIT"
 ```
 
-`reproduce.sh`는 `--execute` 없이 실행하면 계획만 출력한다. 더 작은 GPU에서도 같은 규칙이 실제 KV 용량에 맞춰 동시 요청 수를 줄인다. 이 경우 실행 시간만 달라지며 실기 확인은 남아 있다.
+A100 SXM 80GB에서는 장비 파일을 `configs/hardware/a100_sxm_80gb.yaml`로 지정한다. `--score v8`(기본값)은 보완 판정 없이 V8만 계산한다. `reproduce.sh`는 `--execute` 없이 실행하면 계획만 출력한다. 더 작은 GPU에서도 같은 규칙이 실제 KV 용량에 맞춰 동시 요청 수를 줄인다. 이 경우 실행 시간만 달라지며 실기 확인은 남아 있다.
 
 ## 원본부터 재학습하기
 
