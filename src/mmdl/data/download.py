@@ -2,14 +2,17 @@
 
 import argparse
 import os
+import re
+import tempfile
 import time
+import urllib.request
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
 
 from mmdl.runtime.artifacts import default_path, read_json, sha256_file, write_json
 from mmdl.runtime.contracts import (
-    DATA_ID, DATA_REVISION, MODEL_ID, MODEL_REVISION, PRO_ID, PRO_REVISION, SUBJECTS,
+    DATA_ID, DATA_REVISION, MODEL_ID, MODEL_REVISION, PRO_ID, PRO_REVISION, SUBJECTS, TEST_ANSWER_SOURCE,
 )
 from mmdl.runtime.environment import check_storage
 
@@ -58,13 +61,50 @@ def acquire(repo, revision, kind, filenames, cache, destination=None):
                 download_verify_seconds=time.monotonic() - start), snapshot
 
 
+def test_shards():
+    """Every MMMU test parquet of the pinned revision, listed from the Hub; the manifest pins them."""
+    info = HfApi().repo_info(DATA_ID, repo_type="dataset", revision=DATA_REVISION, files_metadata=True)
+    if info.sha != DATA_REVISION:
+        raise ValueError("Hub returned an unexpected revision")
+    names = sorted(item.rfilename for item in info.siblings
+                   if re.fullmatch(r"[A-Za-z_]+/test-\d{5}-of-\d{5}\.parquet", item.rfilename))
+    for subject in SUBJECTS:
+        shards = [name for name in names if name.split("/")[0] == subject]
+        count = int(shards[0][-13:-8]) if shards else 0
+        if not shards or shards != [f"{subject}/test-{i:05d}-of-{count:05d}.parquet" for i in range(count)]:
+            raise ValueError(f"Incomplete MMMU test shard set for {subject}: {shards}")
+    if {name.split("/")[0] for name in names} != set(SUBJECTS):
+        raise ValueError("MMMU test shards outside the 30 registered subjects")
+    return names
+
+
+def fetch_answer_file(destination):
+    """Pinned official test answers (evaluation only); refuse any byte difference."""
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / "answer_dict_test.json"
+    if not path.exists():
+        with urllib.request.urlopen(TEST_ANSWER_SOURCE["url"], timeout=120) as response:
+            payload = response.read()
+        descriptor, temporary = tempfile.mkstemp(prefix=".answer-", dir=destination)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+        os.replace(temporary, path)
+    checksum = sha256_file(path)
+    if checksum != TEST_ANSWER_SOURCE["sha256"]:
+        raise ValueError(f"Official answer file hash mismatch: {checksum}")
+    return dict(path=path.name, bytes=path.stat().st_size, **TEST_ANSWER_SOURCE)
+
+
 def prepare(root, data_root, cache, artifact_root, include_pro=True, *, suite=None):
-    if suite not in {None, "mmmu-val", "mmmu-pro"}:
+    if suite not in {None, "mmmu-val", "mmmu-pro", "mmmu-test"}:
         raise ValueError("Unknown evaluation suite")
     cache.mkdir(parents=True, exist_ok=True)
     artifact_root.mkdir(parents=True, exist_ok=True)
     specs = [(MODEL_ID, MODEL_REVISION, "model", MODEL_FILES, None, "models/baseline.json")]
-    if suite != "mmmu-pro":
+    if suite == "mmmu-test":
+        specs.append((DATA_ID, DATA_REVISION, "dataset", ["README.md"] + test_shards(),
+                      data_root / "evaluation/mmmu_test", "datasets/mmmu_test.json"))
+    elif suite != "mmmu-pro":
         specs.append((DATA_ID, DATA_REVISION, "dataset",
                       ["README.md"] + [f"{s}/validation-00000-of-00001.parquet" for s in SUBJECTS],
                       data_root / "evaluation/mmmu", "datasets/mmmu.json"))
@@ -84,16 +124,20 @@ def prepare(root, data_root, cache, artifact_root, include_pro=True, *, suite=No
             result["kind"] = "base"
             result["dtype"] = "bfloat16"
             result["processor_revision"] = revision
+        if manifest == "datasets/mmmu_test.json":
+            result["answer_file"] = fetch_answer_file(destination)
         target = root / "manifests" / manifest
         if target.exists():
             old = read_json(target)
-            if old["revision"] != revision or old["files"] != result["files"]:
+            if (old["revision"] != revision or old["files"] != result["files"]
+                    or old.get("answer_file") != result.get("answer_file")):
                 raise ValueError("Existing manifest differs; refusing overwrite")
         else:
             write_json(target, result)
         if destination:
             existing = destination / "manifest.json"
-            if existing.exists() and read_json(existing)["files"] != result["files"]:
+            if existing.exists() and (read_json(existing)["files"] != result["files"]
+                                      or read_json(existing).get("answer_file") != result.get("answer_file")):
                 raise ValueError("Existing local dataset manifest differs")
             if not existing.exists():
                 write_json(existing, result)
@@ -112,7 +156,8 @@ def main():
     parser.add_argument("--cache", type=Path, default=default_path("HF_HOME", "mmdl-cache/huggingface"))
     parser.add_argument("--artifact-root", type=Path, default=default_path("MMDL_ARTIFACT_ROOT", "mmdl-artifacts"))
     parser.add_argument("--skip-pro", action="store_true", help="Skip legacy archival acquisition")
-    parser.add_argument("--suite", choices=["mmmu-val", "mmmu-pro"], help="Acquire only this evaluation suite and base model")
+    parser.add_argument("--suite", choices=["mmmu-val", "mmmu-pro", "mmmu-test"],
+                        help="Acquire only this evaluation suite and base model")
     args = parser.parse_args()
     prepare(Path(__file__).resolve().parents[3], args.data_root, args.cache, args.artifact_root,
             include_pro=not args.skip_pro, suite=args.suite)

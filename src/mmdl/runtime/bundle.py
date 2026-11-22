@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from mmdl.runtime.artifacts import digest, read_json, sha256_file, write_json
+from mmdl.runtime.contracts import SUITE_COUNTS
 from mmdl.runtime.environment import check_storage
 
 
@@ -25,6 +26,8 @@ _EVALUATION_ROLES = ("evaluation",)
 _LEGACY_ROLES = ("assignment", "analysis")
 _SUITE_ROLES = {
     "mmmu-val": _EVALUATION_ROLES,
+    "mmmu-pro": _EVALUATION_ROLES,
+    "mmmu-test": _EVALUATION_ROLES,
     "mmmu-val-two-runs": _LEGACY_ROLES,
     "mmmu-val-assignment": ("assignment",),
     "mmmu-val-analysis": ("analysis",),
@@ -132,6 +135,11 @@ def _publish_exclusive(path: Path, source: Path) -> None:
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+def _suite_count(suite: str) -> int:
+    """Records per run role; the legacy paired MMMU suites are 900-item validation runs."""
+    return SUITE_COUNTS.get(suite, SUITE_COUNTS["mmmu-val"])
 
 
 def _job_contract(job_id: str, metadata: dict[str, Any]) -> tuple[str, str, tuple[str, ...], dict[str, str]]:
@@ -340,11 +348,11 @@ def _cross_run_checks(artifact_root: Path, public_root: Path, job_id: str,
         rows = [read_json(path) for path in sorted((run_dir / "samples").glob("*.json"))]
         inference_ids = {row.get("inference_id") for row in rows}
         invocation_ids = {row.get("inference_invocation_id") for row in rows}
-        if len(rows) != 900 or None in inference_ids or None in invocation_ids or any(
+        if len(rows) != _suite_count(suite) or None in inference_ids or None in invocation_ids or any(
             not isinstance(row.get("inference_started_at"), str) or not row["inference_started_at"] for row in rows
         ):
             raise ValueError(f"{role} records lack inference evidence")
-        if len(inference_ids) != 900:
+        if len(inference_ids) != _suite_count(suite):
             raise ValueError(f"{role} inference IDs are not one-per-sample")
         identities[role] = identity
         id_sets[role] = {row["id"] for row in rows}
@@ -367,7 +375,7 @@ def _cross_run_checks(artifact_root: Path, public_root: Path, job_id: str,
             raise ValueError("A/B Git commits differ")
     return evidence | {"status": "REMOTE_VERIFIED", "bundle_schema": schema, "suite": suite,
                        "roles": list(roles), "pod_id": pod_id,
-                       "total_inference_records": 900 * len(roles)}
+                       "total_inference_records": _suite_count(suite) * len(roles)}
 
 
 def verify(archive_path: Path, expected_sha256: str, destination: Path, repository: Path) -> dict[str, Any]:
@@ -410,7 +418,7 @@ def verify(archive_path: Path, expected_sha256: str, destination: Path, reposito
                        "archive_sha256": actual, "job_id": job_id,
                        "pod_id": evidence["pod_id"], "bundle_schema": schema,
                        "suite": suite, "roles": list(roles),
-                       "expected_inference_records": 900 * len(roles), "runs": evidence}
+                       "expected_inference_records": _suite_count(suite) * len(roles), "runs": evidence}
             write_json(temporary / "local_receipt.json", receipt)
             os.replace(temporary, destination)
             return receipt
@@ -445,15 +453,16 @@ def cleanup_targets(receipt: dict[str, Any], ledger: dict[str, Any], pod_id: str
             raise ValueError("Legacy receipt does not prove both exact full A/B runs")
     else:
         roles = receipt.get("roles")
+        suite = receipt.get("suite")
         if (receipt.get("bundle_schema") != "mmdl-runpod-bundle-v2"
-                or receipt.get("suite") not in _SUITE_ROLES
-                or roles != list(_SUITE_ROLES[receipt["suite"]])
-                or receipt.get("expected_inference_records") != 900 * len(roles)
+                or suite not in _SUITE_ROLES
+                or roles != list(_SUITE_ROLES[suite])
+                or receipt.get("expected_inference_records") != _suite_count(suite) * len(roles)
                 or runs.get("roles") != roles
-                or runs.get("total_inference_records") != 900 * len(roles)
+                or runs.get("total_inference_records") != _suite_count(suite) * len(roles)
                 or any(not isinstance(runs.get(role), dict)
                        or runs[role].get("run_id") != f"{job_id}-{role}"
-                       or runs[role].get("count") != 900 for role in roles)):
+                       or runs[role].get("count") != _suite_count(suite) for role in roles)):
             raise ValueError("Receipt does not prove the exact complete suite roles")
     if (not isinstance(ledger, dict) or ledger.get("job_id") != job_id or ledger.get("pod_id") != pod_id
             or ledger.get("created_for_job") is not True):

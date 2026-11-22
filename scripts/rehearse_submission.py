@@ -1,4 +1,4 @@
-"""Bounded, nonreportable GPU rehearsal of public Pro commands and pinned engine parity."""
+"""Bounded, nonreportable GPU rehearsal of public Pro/test commands and pinned engine parity."""
 
 from __future__ import annotations
 
@@ -13,6 +13,25 @@ import time
 from mmdl.runtime.artifacts import digest, read_json, sha256_file, write_json
 
 REVISION = "ebb281ec70b05090aa6165b016eac8ec08e71b17"
+SUITES = {  # suite -> (frozen protocol, loader module, real cases that must be present)
+    "mmmu-pro": ("mmmu_pro_standard10_v8_a100.yaml", "mmmu_pro",
+                 ("validation_Pharmacy_4", "validation_Pharmacy_22", "test_Geography_252")),
+    "mmmu-test": ("mmmu_test_lowres2k_v8.yaml", "mmmu_test",
+                  ("test_Geography_252", "test_Biology_52", "test_Math_5")),
+}
+
+
+def tiny_protocol(repo: Path, output: Path, suite: str) -> Path:
+    """Shrink only output length, concurrency cap and memory fraction of the frozen suite protocol."""
+    import yaml
+
+    path = output / ("tiny-pro.yaml" if suite == "mmmu-pro" else "tiny-test.yaml")
+    if not path.exists():
+        cfg = yaml.safe_load((repo / "configs/eval" / SUITES[suite][0]).read_text())
+        cfg["generation"]["max_new_tokens"] = 16
+        cfg["execution"].update(batch_size=2, gpu_memory_utilization=.62)
+        path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return path
 
 
 def _tiny_factory(path, arm, protocol):
@@ -100,10 +119,8 @@ def prepare(repo: Path, output: Path, checkpoint: Path) -> dict:
     write_json(selector, {"kind": "derived-rehearsal", "reportable": False,
                           "reference_sha256": sha256_file(derived / "model_ref.json"),
                           "export_manifest_sha256": reference["artifact_revision"]})
-    cfg = yaml.safe_load((repo / "configs/eval/mmmu_pro_standard10_v8_a100.yaml").read_text())
-    cfg["generation"]["max_new_tokens"] = 16
-    cfg["execution"].update(batch_size=2, gpu_memory_utilization=.62)
-    (output / "tiny-pro.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    for suite in SUITES:
+        tiny_protocol(repo, output, suite)
     hw = yaml.safe_load((repo / "configs/hardware/rtx5060_8gb.yaml").read_text())
     hw.update(placement="gpu_only", min_free_gpu_gib=1.0)
     (output / "tiny-hardware.yaml").write_text(yaml.safe_dump(hw, sort_keys=False))
@@ -132,27 +149,32 @@ def _kill_owned(process: subprocess.Popen, ticks: str) -> None:
     process.wait(timeout=30)
 
 
-def run(repo: Path, output: Path, data_root: Path, deadline_seconds: int) -> dict:
+def run(repo: Path, output: Path, data_root: Path, deadline_seconds: int, suite: str = "mmmu-pro") -> dict:
     if not 0 < deadline_seconds <= 1800:
         raise ValueError("Rehearsal deadline must be within 30 minutes")
     prepared = read_json(output / "prepared.json")
+    prepared_sha256 = sha256_file(output / "prepared.json")
     for name, checksum in prepared["checkpoint_files"].items():
         if sha256_file(Path(prepared["checkpoint"]) / name) != checksum:
             raise ValueError("Archived tiny checkpoint changed")
-    from mmdl.evaluation.datasets.mmmu_pro import load_test
-    datasets, _ = load_test(data_root)
+    import importlib
+    protocol = str(tiny_protocol(repo, output, suite))
+    datasets, _ = importlib.import_module(f"mmdl.evaluation.datasets.{SUITES[suite][1]}").load_test(data_root)
     ids = sorted(sid for dataset in datasets.values() for sid in dataset["id"])
-    selected = list(dict.fromkeys(["validation_Pharmacy_4", "validation_Pharmacy_22", "test_Geography_252", *ids[:3]]))
+    selected = list(dict.fromkeys([*SUITES[suite][2], *ids[:3]]))
     if not set(selected) <= set(ids):
-        raise ValueError("Required real Pro image cases are missing")
+        raise ValueError("Required real image cases are missing")
+    if suite != "mmmu-pro":  # keep the historical Pro artifact names unchanged
+        output = output / suite
+        output.mkdir(exist_ok=True)
     env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(repo), str(repo / "src"))),
                HF_HOME=str(Path.home() / "mmdl-cache/huggingface"), HF_HUB_OFFLINE="1",
                TRANSFORMERS_OFFLINE="1", HF_DATASETS_OFFLINE="1", MMDL_PYTHON=sys.executable,
                VLLM_ENABLE_V1_MULTIPROCESSING="0")
     started = time.monotonic()
     deadline = started + deadline_seconds
-    receipt = {"reportable": False, "status": "RUNNING", "stages": [], "selected_ids": selected,
-               "prepared_sha256": sha256_file(output / "prepared.json")}
+    receipt = {"reportable": False, "status": "RUNNING", "stages": [], "suite": suite, "selected_ids": selected,
+               "prepared_sha256": prepared_sha256}
 
     def execute(label: str, command: list[str], interrupt: Path | None = None) -> dict:
         before = time.monotonic()
@@ -186,7 +208,7 @@ def run(repo: Path, output: Path, data_root: Path, deadline_seconds: int) -> dic
         return result
 
     try:
-        common = ["--suite", "mmmu-pro", "--protocol", prepared["protocol"], "--hardware", prepared["hardware"],
+        common = ["--suite", suite, "--protocol", protocol, "--hardware", prepared["hardware"],
                   "--base-path", prepared["base"], "--data-root", str(data_root), "--artifact-root", str(output / "artifacts"),
                   "--public-root", str(output / "public"), "--rehearsal", "--mode", "smoke", "--score", "v8"]
         for sid in selected:
@@ -205,7 +227,7 @@ def run(repo: Path, output: Path, data_root: Path, deadline_seconds: int) -> dic
             receipt[arm] = {"saved_records": after, "duplicate_count": 0}
             for engine in ("reference", "submission"):
                 probe = [sys.executable, "-m", "mmdl.evaluation.backend_parity", "run", "--engine", engine,
-                         "--protocol", prepared["protocol"], "--hardware", prepared["hardware"],
+                         "--protocol", protocol, "--hardware", prepared["hardware"],
                          "--model-path", prepared["base"] if arm == "base" else str(Path(prepared["derived"]) / "model"),
                          "--rehearsal", "--output", str(output / f"{arm}-{engine}.json")]
                 if arm == "finetuned":
@@ -234,6 +256,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--deadline-seconds", type=int, default=1800)
+    parser.add_argument("--suite", choices=tuple(SUITES), default="mmmu-pro")
     args = parser.parse_args()
     repo, output = args.repo.resolve(), args.output.resolve()
     if output.is_relative_to(repo):
@@ -245,7 +268,7 @@ def main() -> None:
     else:
         if args.data_root is None:
             parser.error("run requires --data-root")
-        run(repo, output, args.data_root.resolve(), args.deadline_seconds)
+        run(repo, output, args.data_root.resolve(), args.deadline_seconds, args.suite)
 
 
 if __name__ == "__main__":

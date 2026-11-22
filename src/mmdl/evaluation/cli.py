@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from mmdl.runtime.artifacts import default_path, digest, read_json, sha256_file, write_json
-from mmdl.runtime.contracts import MODEL_ID, MODEL_REVISION, SUBJECTS, load_configs
+from mmdl.runtime.contracts import MODEL_ID, MODEL_REVISION, SUBJECTS, SUITE_COUNTS, SUITE_DATA_DIRS, load_configs, suite_of
 
 
 def validate_execution(args, hw):
@@ -28,7 +28,7 @@ def validate_execution(args, hw):
 def arguments(argv=None):
     root = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", choices=["mmmu-val", "mmmu-pro"], default="mmmu-val")
+    parser.add_argument("--suite", choices=list(SUITE_COUNTS), default="mmmu-val")
     parser.add_argument("--model", choices=["base", "finetuned"], default="base")
     parser.add_argument("--score", choices=["v8", "both"], default="v8")
     parser.add_argument("--score-only", action="store_true",
@@ -61,6 +61,8 @@ def arguments(argv=None):
     args = parser.parse_args(argv)
     if args.score_only and args.score != "both":
         parser.error("--score-only requires --score both")
+    if args.suite == "mmmu-test" and args.score != "v8":
+        parser.error("MMMU test is scored with V8 only; supplemental --score both is not registered")
     if args.rehearsal:
         if args.mode != "smoke" or not all((args.protocol, args.model_ref, args.model_path, args.data_root)):
             parser.error("--rehearsal requires smoke mode and explicit protocol/model-ref/model-path/data-root")
@@ -74,13 +76,13 @@ def arguments(argv=None):
         "rtx4090_24gb.yaml" if args.suite == "mmmu-val" and args.model == "base" else "a100_sxm_80gb.yaml")
     profile = "4090" if "24gb" in args.hardware.name else "a100"
     args.protocol = args.protocol or root / "configs/eval" / (
+        "mmmu_test_lowres2k_v8.yaml" if args.suite == "mmmu-test" else
         "mmmu_val_v8.yaml" if args.suite == "mmmu-val" and args.model == "base" else
         f"mmmu_val_v18b_ft_{profile}.yaml" if args.suite == "mmmu-val" else
         f"mmmu_pro_standard10_v8_{profile}.yaml")
     args.model_ref = args.model_ref or root / "manifests/models" / (
         "baseline.json" if args.model == "base" else "v18b.json")
-    args.data_root = args.data_root or default_path("MMDL_DATA_ROOT", "mmdl-data") / (
-        "evaluation/mmmu" if args.suite == "mmmu-val" else "evaluation/mmmu_pro")
+    args.data_root = args.data_root or default_path("MMDL_DATA_ROOT", "mmdl-data") / SUITE_DATA_DIRS[args.suite]
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", args.run_id):
         parser.error("run-id must be a safe directory name")
     if args.limit is not None and args.limit < 1:
@@ -155,7 +157,7 @@ def load_evaluation_configs(args):
         return load_configs(args.protocol, args.hardware)
     import copy
     import yaml
-    from mmdl.runtime.contracts import EXECUTION_PROFILES, SUBMISSION_PROFILES, validate_configs
+    from mmdl.runtime.contracts import EXECUTION_PROFILES, PROFILE_MAX_NEW_TOKENS, SUBMISSION_PROFILES, validate_configs
 
     cfg = yaml.safe_load(args.protocol.read_text(encoding="utf-8"))
     hw = yaml.safe_load(args.hardware.read_text(encoding="utf-8"))
@@ -169,7 +171,7 @@ def load_evaluation_configs(args):
     if not 0.1 <= cfg["execution"]["gpu_memory_utilization"] <= 0.9:
         raise ValueError("Invalid rehearsal GPU memory fraction")
     canonical = copy.deepcopy(cfg)
-    canonical["generation"]["max_new_tokens"] = 32768
+    canonical["generation"]["max_new_tokens"] = PROFILE_MAX_NEW_TOKENS.get(pid, 32768)
     for key in ("batch_size", "gpu_memory_utilization"):
         canonical["execution"][key] = EXECUTION_PROFILES[pid][key]
     target = SUBMISSION_PROFILES[pid][3]
@@ -233,8 +235,7 @@ def main(argv=None):
     root = Path(__file__).resolve().parents[3]
     os.environ.setdefault("HF_HOME", str(default_path("HF_HOME", "mmdl-cache/huggingface")))
     cfg, hw = load_evaluation_configs(args)
-    cfg_suite = "mmmu-pro" if cfg["dataset"]["id"] == "MMMU/MMMU_Pro" else "mmmu-val"
-    if cfg_suite != args.suite:
+    if suite_of(cfg) != args.suite:
         parser.error("--suite differs from the selected protocol")
     try:
         validate_execution(args, hw)
@@ -267,8 +268,7 @@ def main(argv=None):
     if not args.model_ref.exists() or not (args.data_root / "manifest.json").exists():
         if args.no_download:
             parser.error("Verified model/data manifests missing; run python -m mmdl.data.download")
-        standard_data = default_path("MMDL_DATA_ROOT", "mmdl-data") / (
-            "evaluation/mmmu_pro" if args.suite == "mmmu-pro" else "evaluation/mmmu")
+        standard_data = default_path("MMDL_DATA_ROOT", "mmdl-data") / SUITE_DATA_DIRS[args.suite]
         if args.data_root != standard_data:
             parser.error("Custom data-root must contain a prepared manifest and validation snapshot")
         from mmdl.data.download import prepare
@@ -297,7 +297,7 @@ def rescore_main(argv=None):
     parser = argparse.ArgumentParser(description="Rescore preserved responses into a separate artifact")
     parser.add_argument("--run-id")
     parser.add_argument("--source-run", type=Path, help="Read a preserved run at this path")
-    parser.add_argument("--suite", choices=["mmmu-val", "mmmu-pro"], default="mmmu-val")
+    parser.add_argument("--suite", choices=list(SUITE_COUNTS), default="mmmu-val")
     parser.add_argument("--score", choices=["v8", "both"], default="v8")
     parser.add_argument("--checker-run", type=Path,
                         help="Existing official checker ledger; replay only, no new judge inference")
@@ -315,6 +315,8 @@ def rescore_main(argv=None):
         parser.error("Invalid run ID")
     if args.score == "both" and args.checker_run is None:
         parser.error("Saved-response --score both requires --checker-run; no judge is started by rescore")
+    if args.suite == "mmmu-test" and args.score != "v8":
+        parser.error("MMMU test is scored with V8 only")
     source = args.source_run or args.artifact_root / "runs" / args.run_id
     source_cfg = yaml.safe_load((source / "resolved_eval_config.yaml").read_text())
     parser_id = args.parser or ("team-final-answer-v8" if args.score == "both" else source_cfg["parser"])
@@ -332,7 +334,7 @@ def rescore_main(argv=None):
                       "parser": parser_id,
                       "source_sha256": sha256_file(source / "predictions.jsonl"),
                       **({"suite": args.suite, "id_subjects": registration["id_subjects"]}
-                         if args.suite == "mmmu-pro" else {})},
+                         if args.suite != "mmmu-val" else {})},
                        [r["id"] for r in rows], resume=destination.exists())
     changed = 0
     transitions = {"0->0": 0, "0->1": 0, "1->0": 0, "1->1": 0}
@@ -410,7 +412,7 @@ def report_main(argv):
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("preview", "paired"):
         sub = commands.add_parser(command)
-        sub.add_argument("--suite", choices=["mmmu-val", "mmmu-pro"], required=True)
+        sub.add_argument("--suite", choices=list(SUITE_COUNTS), required=True)
         sub.add_argument("--output-dir", type=Path, required=True)
         if command == "preview":
             sub.add_argument("--source-run", type=Path, required=True)

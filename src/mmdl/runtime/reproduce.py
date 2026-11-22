@@ -27,6 +27,10 @@ HARDWARE_PROFILES = {
 _GPU_SAMPLE_INTERVAL_MS = 500
 _INFERENCE_STAGES = frozenset({"smoke", "evaluation"})
 _PRO_FULL_MIN_SECONDS = 20 * 60 * 60
+# Bootstrap Python has no PyYAML, so contracts.SUITE_COUNTS / SUITE_DATA_DIRS are mirrored (unit-tested).
+SUITE_COUNTS = {"mmmu-val": 900, "mmmu-pro": 1730, "mmmu-test": 10500}
+SUITE_DATA_DIRS = {"mmmu-val": "evaluation/mmmu", "mmmu-pro": "evaluation/mmmu_pro",
+                   "mmmu-test": "evaluation/mmmu_test"}
 
 
 def arguments(argv=None):
@@ -34,7 +38,7 @@ def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=["evaluate"], default="evaluate")
     parser.add_argument("--target", choices=["runpod"], default="runpod")
-    parser.add_argument("--suite", choices=["mmmu-val", "mmmu-pro"], default="mmmu-val")
+    parser.add_argument("--suite", choices=list(SUITE_COUNTS), default="mmmu-val")
     parser.add_argument("--model", choices=["base", "finetuned"], default="base")
     parser.add_argument("--score", choices=["v8", "both"], default="v8")
     parser.add_argument("--engine-validation", type=Path)
@@ -52,7 +56,11 @@ def arguments(argv=None):
     args = parser.parse_args(argv)
     if args.model_path is None and args.model == "base":
         args.model_path = os.environ.get("MMDL_MODEL_PATH", "Qwen/Qwen3-VL-4B-Instruct")
-    if args.suite == "mmmu-pro" or args.model == "finetuned":
+    if args.suite == "mmmu-test" and args.score != "v8":
+        parser.error("MMMU test is scored with V8 only; --score both is not registered")
+    if args.suite == "mmmu-test" and args.protocol == root / "configs/eval/mmmu_val_v8.yaml":
+        args.protocol = root / "configs/eval/mmmu_test_lowres2k_v8.yaml"
+    if args.suite != "mmmu-val" or args.model == "finetuned":
         profile = "4090" if "24gb" in args.hardware.name else "a100"
         if args.protocol == root / "configs/eval/mmmu_val_v8.yaml":
             name = (f"mmmu_pro_standard10_v8_{profile}.yaml" if args.suite == "mmmu-pro"
@@ -301,19 +309,18 @@ def _verification_commands(args, python, artifacts, public):
 
 def _operator_plan(args, root):
     from mmdl.runtime.artifacts import default_path
-    from mmdl.runtime.contracts import load_configs
+    from mmdl.runtime.contracts import load_configs, suite_of
 
     deadline = _full_run_deadline(args)
     cfg, _ = load_configs(args.protocol, args.hardware)
-    expected_suite = "mmmu-pro" if cfg["dataset"]["id"] == "MMMU/MMMU_Pro" else "mmmu-val"
-    if args.suite != expected_suite or cfg["status"] != "FROZEN":
+    if args.suite != suite_of(cfg) or cfg["status"] != "FROZEN":
         raise ValueError("Selected suite requires its matching frozen protocol")
     artifacts = default_path("MMDL_ARTIFACT_ROOT", "mmdl-artifacts")
     cache = default_path("HF_HOME", "mmdl-cache/huggingface")
     data_root = default_path("MMDL_DATA_ROOT", "mmdl-data")
-    data = args.data_root or data_root / ("evaluation/mmmu_pro" if args.suite == "mmmu-pro" else "evaluation/mmmu")
+    data = args.data_root or data_root / SUITE_DATA_DIRS[args.suite]
     python = default_path("MMDL_VENV_ROOT", "mmdl-envs/eval") / "bin/python"
-    submission = args.suite == "mmmu-pro" or args.model == "finetuned" or args.score == "both"
+    submission = args.suite != "mmmu-val" or args.model == "finetuned" or args.score == "both"
     lock = _lock_path(root, cfg["execution"]["backend"], submission)
     download = [python, "-m", "mmdl.data.download", "--data-root", data_root, "--cache", cache,
                 "--artifact-root", artifacts, "--suite", args.suite]
@@ -354,7 +361,7 @@ def _operator_plan(args, root):
 def execute(args, root):
     _validate_hardware_profile(args.hardware)
     backend = _protocol_backend(args.protocol)
-    submission = args.suite == "mmmu-pro" or args.model == "finetuned" or args.score == "both"
+    submission = args.suite != "mmmu-val" or args.model == "finetuned" or args.score == "both"
     lock = _lock_path(root, backend, submission)
     lock_receipt = _lock_receipt(lock)
     git_commit(root, args.commit)
@@ -365,8 +372,7 @@ def execute(args, root):
     if deadline is not None and not os.environ.get("MMDL_WATCHDOG_ID"):
         raise ValueError("An armed external watchdog is required for an explicit stop deadline")
     artifacts, venv = paths["MMDL_ARTIFACT_ROOT"], paths["MMDL_VENV_ROOT"]
-    data = args.data_root.resolve() if args.data_root else paths["MMDL_DATA_ROOT"] / (
-        "evaluation/mmmu_pro" if args.suite == "mmmu-pro" else "evaluation/mmmu")
+    data = args.data_root.resolve() if args.data_root else paths["MMDL_DATA_ROOT"] / SUITE_DATA_DIRS[args.suite]
     if not data.is_relative_to(paths["MMDL_DATA_ROOT"]):
         raise ValueError("Selected evaluation data must be under MMDL_DATA_ROOT")
     public = artifacts / "public"
@@ -512,7 +518,7 @@ def main(argv=None):
                           "steps": ["clean GitHub checkout", "exact-lock venv", "doctor", "pinned download"] +
                                    ([] if args.prepare_only else (
                                        (["one smoke"] if args.suite == "mmmu-val" and args.model == "base" else [])
-                                       + [f"one evaluation ({1730 if args.suite == 'mmmu-pro' else 900} samples)", "verify and bundle"])),
+                                       + [f"one evaluation ({SUITE_COUNTS[args.suite]} samples)", "verify and bundle"])),
                           "external_gate": "persistent volume; strict approved budget and STOP watchdog, or explicit user_waived cost policy",
                           "plan": plan}))
         return

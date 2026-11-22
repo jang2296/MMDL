@@ -17,12 +17,12 @@ from pathlib import Path
 import yaml
 
 from mmdl.evaluation.datasets.mmmu import load_validation, separate_sample
-from mmdl.evaluation.datasets import mmmu_pro
+from mmdl.evaluation.datasets import mmmu_pro, mmmu_test
 from mmdl.evaluation.parsers import score_with_parser
 from mmdl.evaluation.prompt import build_messages
 from mmdl.evaluation.writer import RunWriter, finalize, render
 from mmdl.runtime.artifacts import atomic_bytes, atomic_text, digest, file_records, git_commit, read_json, sha256_file, write_json
-from mmdl.runtime.contracts import MODEL_ID, MODEL_REVISION, sample_seed
+from mmdl.runtime.contracts import MODEL_ID, MODEL_REVISION, sample_seed, suite_of
 from mmdl.runtime.environment import check_storage, collect_environment
 
 
@@ -116,12 +116,13 @@ def validate_batch_outputs(requests, outputs):
 
 
 def prepare_request(row, subject, artifact_root, run_dir, cfg):
-    pro = cfg.get("dataset", {}).get("id") == "MMMU/MMMU_Pro"
-    splitter = mmmu_pro.separate_sample if pro else separate_sample
+    suite = suite_of(cfg)
+    splitter = {"mmmu-pro": mmmu_pro.separate_sample, "mmmu-test": mmmu_test.separate_sample}.get(
+        suite, separate_sample)
     sample, images, gold = splitter(row, subject)
-    if len(images) > (7 if pro else 5):
+    if len(images) > (5 if suite == "mmmu-val" else 7):
         raise ValueError("Image count exceeds the registered suite limit")
-    messages = (mmmu_pro.build_messages if pro else build_messages)(sample, images, run_dir)
+    messages = (mmmu_pro.build_messages if suite == "mmmu-pro" else build_messages)(sample, images, run_dir)
     serialized = [{"role": "user", "content": []}]
     image_files = []
     for image in images:
@@ -177,9 +178,11 @@ def run(args, cfg, hw, root):
     from mmdl.runtime.contracts import validate_profile_model
     validate_profile_model(cfg, model_manifest["kind"])
     rehearsal = getattr(args, "rehearsal", False)
-    pro = cfg["dataset"]["id"] == "MMMU/MMMU_Pro"
+    suite = suite_of(cfg)
+    # Pro and test use the named graph-mode submission engine for both models, as does every FT run.
+    pinned = suite != "mmmu-val"
     parity = None
-    if args.mode == "full" and (pro or model_manifest["kind"] == "unmerged-lora"):
+    if args.mode == "full" and (pinned or model_manifest["kind"] == "unmerged-lora"):
         from mmdl.evaluation.backend_parity import ensure_admission
         parity = ensure_admission(args, cfg, hw, model_manifest)
     environment = collect_environment()
@@ -188,8 +191,8 @@ def run(args, cfg, hw, root):
     storage = check_storage([args.artifact_root, args.data_root], 4 * 1024**3)
     if not storage["sufficient"]:
         raise RuntimeError("Storage headroom is below the recorded reserve + run budget")
-    suite = "mmmu-pro" if pro else "mmmu-val"
-    datasets, coverage = (mmmu_pro.load_test if pro else load_validation)(args.data_root)
+    loader = {"mmmu-pro": mmmu_pro.load_test, "mmmu-test": mmmu_test.load_test}.get(suite, load_validation)
+    datasets, coverage = loader(args.data_root)
     lookup = {sid: (subject, index) for subject, dataset in datasets.items()
               for index, sid in enumerate(dataset["id"])}
     ids = sorted(lookup)
@@ -207,12 +210,12 @@ def run(args, cfg, hw, root):
             ids = ids[:args.limit]
         if not ids:
             raise ValueError("Empty smoke selection")
-    if pro or model_manifest["kind"] != "base":
+    if pinned or model_manifest["kind"] != "base":
         from fine_tuning.error_note.v17_eval import submission_order
         ids = submission_order(ids)
     coverage = coverage | {"submission_order_sha256": digest(ids),
                            "seed_order_sha256": digest([sample_seed(cfg["generation"]["seed"], sid) for sid in ids])}
-    records = code_records(root, submission=pro or model_manifest["kind"] == "unmerged-lora")
+    records = code_records(root, submission=pinned or model_manifest["kind"] == "unmerged-lora")
     protocol_files = file_records(root, list((root / "prompts").glob("mmmu_*_v1.txt")) +
                                  [root / "src/mmdl/evaluation/prompt.py",
                                   root / "src/mmdl/evaluation/parsers.py",
@@ -224,13 +227,16 @@ def run(args, cfg, hw, root):
         ])
     if cfg["parser"] == "team-final-answer-v8":
         protocol_files += file_records(root, [root / "src/mmdl/evaluation/final_answer_parser_v8.py"])
-    if pro or model_manifest["kind"] != "base":
+    if pinned or model_manifest["kind"] != "base":
         protocol_files += file_records(root, [
             root / "src/mmdl/evaluation/datasets/mmmu.py",
             root / "src/mmdl/evaluation/datasets/mmmu_pro.py",
             root / "src/mmdl/evaluation/backends/vllm_backend.py",
             root / "fine_tuning/error_note/v17_eval.py",
         ])
+    if suite == "mmmu-test":
+        protocol_files += file_records(root, [root / "src/mmdl/evaluation/datasets/mmmu_test.py",
+                                              root / "manifests/datasets/mmmu_test.json"])
     data_manifest = read_json(args.data_root / "manifest.json")
     processor_files = [item for item in base_manifest["files"] if not item["path"].endswith(".safetensors")]
     protocol_hash = digest(dict(config=cfg, files=protocol_files, processor=processor_files,
@@ -239,7 +245,7 @@ def run(args, cfg, hw, root):
                     code_sha256=digest(records), environment_sha256=digest(environment_identity(environment)),
                     hardware=hw, ids_sha256=digest(ids), mode=args.mode,
                     git_commit=commit, job_id=args.job_id, run_role=args.run_role)
-    if pro:
+    if pinned:
         identity.update(suite=suite, id_subjects={sid: lookup[sid][0] for sid in ids},
                         subject_counts=coverage["subject_counts"],
                         submission_order_sha256=digest(ids), seed_order_sha256=coverage["seed_order_sha256"])
@@ -281,7 +287,7 @@ def run(args, cfg, hw, root):
                 reproduce += f" --require-commit {args.require_commit}"
             if args.job_id:
                 reproduce += f" --job-id {args.job_id} --run-role {args.run_role}"
-            if pro or model_manifest["kind"] == "unmerged-lora" or rehearsal:
+            if pinned or model_manifest["kind"] == "unmerged-lora" or rehearsal:
                 import shlex
                 reproduce = shlex.join(["bash", "scripts/eval.sh", *sys.argv[1:]])
             write_json(run_dir / "command.json", {"actual_argv": sys.argv, "reproduce_command": reproduce})
@@ -413,6 +419,9 @@ def run(args, cfg, hw, root):
         summary = finalize(run_dir, ids, args.mode)
         if rehearsal:
             summary.update(reportable=False, rehearsal=True)
+        admission = getattr(backend, "last_admission", None)
+        if admission is not None:
+            summary["kv_admission_this_invocation"] = admission.summary()
         summary.update(evaluation_seconds_this_invocation=time.monotonic() - evaluation_start,
                        model_load_seconds=backend.load_seconds,
                        total_seconds_this_invocation=time.monotonic() - start,

@@ -1,0 +1,78 @@
+status: FROZEN
+protocol_id: mmmu-test-lowres2k-v8-v1
+model:
+  id: Qwen/Qwen3-VL-4B-Instruct
+  revision: ebb281ec70b05090aa6165b016eac8ec08e71b17
+  dtype: bfloat16
+dataset:
+  id: MMMU/MMMU
+  revision: 98e6ac0cb9b7b2cd2c991b85a50762edc4aedc68
+  split: test
+  subjects:
+  - Accounting
+  - Agriculture
+  - Architecture_and_Engineering
+  - Art
+  - Art_Theory
+  - Basic_Medical_Science
+  - Biology
+  - Chemistry
+  - Clinical_Medicine
+  - Computer_Science
+  - Design
+  - Diagnostics_and_Laboratory_Medicine
+  - Economics
+  - Electronics
+  - Energy_and_Power
+  - Finance
+  - Geography
+  - History
+  - Literature
+  - Manage
+  - Marketing
+  - Materials
+  - Math
+  - Mechanical_Engineering
+  - Music
+  - Pharmacy
+  - Physics
+  - Psychology
+  - Public_Health
+  - Sociology
+  expected_total: 10500
+  answer_source:
+    url: https://raw.githubusercontent.com/MMMU-Benchmark/MMMU/bc168a9119d986d7cdf1e07b1eeb96ed3e8f92fa/mmmu/answer_dict_test.json
+    sha256: 45b639a937017d3d71f81f610df3a1471debe1887c5c1d24644fec1b33059d5c
+    commit: bc168a9119d986d7cdf1e07b1eeb96ed3e8f92fa
+prompt_policy: P0
+parser: team-final-answer-v8
+generation:
+  do_sample: true
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  repetition_penalty: 1.0
+  presence_penalty: 1.5
+  seed: 3407
+  seed_policy: per_sample_sha256_v1
+  max_new_tokens: 2048
+  num_beams: 1
+image:
+  min_pixels: 262144
+  max_pixels: 1310720
+  resize_owner: qwen_vl_utils
+  preprocessing: qwen_vl_utils_0_0_14
+execution:
+  backend: vllm
+  batch_size: 64
+  attention: vllm
+  sdpa_kernel: not_applicable
+  deterministic: false
+  scheduling: continuous
+  max_model_len: 16384
+  max_images_per_prompt: 7
+  enforce_eager: false
+  gpu_memory_utilization: 0.9
+  kv_safety_fraction: 0.9
+  logprobs_mode: raw_logprobs
+  admission: kv_reservation

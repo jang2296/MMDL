@@ -62,8 +62,52 @@ def _device_memory_used_bytes() -> int | None:
         return None
 
 
+KV_RESERVATION_RULE = (
+    "admit requests in submission order while active < max_num_seqs and the sum over active requests of "
+    "ceil((input_tokens + max_new_tokens) / block_size) * block_size stays <= "
+    "floor(kv_safety_fraction * actual_kv_token_capacity); the next request waits, nothing skips ahead")
+
+
+class KVAdmission:
+    """Reserve each admitted request's whole context in the measured KV pool, so vLLM never preempts."""
+
+    def __init__(self, *, usable_tokens: int, block_size: int, slots: int, max_new_tokens: int):
+        if any(type(n) is not int or n < 1 for n in (usable_tokens, block_size, slots, max_new_tokens)):
+            raise ValueError("Invalid KV admission limits")
+        self.usable_tokens, self.block_size = usable_tokens, block_size
+        self.slots, self.max_new_tokens = slots, max_new_tokens
+        self.reserved: dict[str, int] = {}
+        self.max_concurrent = self.steps = self.active_step_sum = 0
+
+    def need(self, input_tokens: int) -> int:
+        return math.ceil((input_tokens + self.max_new_tokens) / self.block_size) * self.block_size
+
+    def admit(self, request_id: str, input_tokens: int) -> bool:
+        need = self.need(input_tokens)
+        if need > self.usable_tokens:
+            raise ValueError(f"Request {request_id} can never fit the measured KV pool: {need} > {self.usable_tokens}")
+        if len(self.reserved) >= self.slots or sum(self.reserved.values()) + need > self.usable_tokens:
+            return False
+        self.reserved[request_id] = need
+        self.max_concurrent = max(self.max_concurrent, len(self.reserved))
+        return True
+
+    def release(self, request_id: str) -> None:
+        del self.reserved[request_id]
+
+    def observe_step(self) -> None:
+        self.steps += 1
+        self.active_step_sum += len(self.reserved)
+
+    def summary(self) -> dict[str, Any]:
+        return {"rule": KV_RESERVATION_RULE, "usable_tokens": self.usable_tokens, "block_size": self.block_size,
+                "max_num_seqs": self.slots, "max_new_tokens": self.max_new_tokens, "engine_steps": self.steps,
+                "max_concurrent_requests": self.max_concurrent,
+                "mean_concurrent_requests_per_step": self.active_step_sum / self.steps if self.steps else None}
+
+
 def allocated_kv_capacity(engine: Any, version: str, *, max_model_len: int,
-                          slots: int, safety_fraction: float = .90) -> dict[str, Any]:
+                          slots: int, safety_fraction: float = .90, admission: str = "fixed") -> dict[str, Any]:
     """Read the same live scheduler blocks as v17; reserve each complete context."""
     if version != VLLM_VERSION or type(slots) is not int or slots < 1:
         raise ValueError("Unsupported KV engine version or slot count")
@@ -82,6 +126,19 @@ def allocated_kv_capacity(engine: Any, version: str, *, max_model_len: int,
     reserved = math.ceil(max_model_len / block_size) * block_size
     tokens, required = blocks * block_size, slots * reserved
     usable = math.floor(safety_fraction * tokens)
+    if admission == "kv_reservation":
+        # Concurrency is admitted per request from measured input lengths; one maximum context must fit.
+        value = dict(version="submission-kv-reservation-v1", admission=admission, rule=KV_RESERVATION_RULE,
+                     vllm_version=version, slots=slots, max_model_len=max_model_len, actual_blocks=blocks,
+                     block_size=block_size, actual_kv_token_capacity=tokens, usable_tokens=usable,
+                     safety_fraction=safety_fraction, reserved_per_request=reserved, required_tokens=reserved,
+                     full_context_requests=usable // reserved)
+        value["pass"] = reserved <= usable
+        if not value["pass"]:
+            raise ValueError(f"Insufficient actual KV capacity for one maximum request: {reserved} > {usable}")
+        return value
+    if admission != "fixed":
+        raise ValueError(f"Unknown KV admission rule: {admission}")
     result = dict(version="submission-kv-v1", vllm_version=version, slots=slots,
                   max_model_len=max_model_len, actual_blocks=blocks, block_size=block_size,
                   actual_kv_token_capacity=tokens, usable_tokens=usable,
@@ -91,6 +148,32 @@ def allocated_kv_capacity(engine: Any, version: str, *, max_model_len: int,
     if not result["pass"]:
         raise ValueError(f"Insufficient actual KV capacity: {required} > {usable}; re-register both arms")
     return result
+
+
+def observe_reservation_engine(backend: Any, mode: str, slots: int, max_model_len: int) -> dict[str, Any]:
+    """Live-engine checks of v17 observe_engine for a measured-admission profile (its own context length)."""
+    engine = backend.llm.llm_engine
+    config = engine.vllm_config
+    model, scheduler, compilation = config.model_config, config.scheduler_config, config.compilation_config
+    graph_mode = getattr(compilation.cudagraph_mode, "name", str(compilation.cudagraph_mode))
+    sampler = engine.engine_core.engine_core.model_executor.driver_worker.worker.model_runner.sampler
+    value = {"version": "kv-reservation-engine-observed-v1", "engine_mode": mode,
+             "vllm_version": backend.vllm_version, "enforce_eager": model.enforce_eager,
+             "dtype": str(model.dtype), "quantization": model.quantization,
+             "logprobs_mode": model.logprobs_mode, "sampler_logprobs_mode": sampler.logprobs_mode,
+             "max_model_len": model.max_model_len, "slots": scheduler.max_num_seqs,
+             "compilation_config": {"level": compilation.level, "cudagraph_mode": graph_mode,
+                                    "cudagraph_capture_sizes": compilation.cudagraph_capture_sizes},
+             "allocated_kv": allocated_kv_capacity(engine, backend.vllm_version, max_model_len=model.max_model_len,
+                                                   slots=scheduler.max_num_seqs, admission="kv_reservation")}
+    if (mode not in ("cuda_graph", "eager") or type(model.enforce_eager) is not bool
+            or model.enforce_eager != (mode == "eager")
+            or str(model.dtype) not in ("bfloat16", "torch.bfloat16") or model.quantization is not None
+            or model.logprobs_mode != "raw_logprobs" or sampler.logprobs_mode != "raw_logprobs"
+            or model.max_model_len != max_model_len or scheduler.max_num_seqs != slots
+            or (mode == "cuda_graph" and graph_mode in ("NONE", "None", "0"))):
+        raise ValueError("KV-reservation engine: effective engine config differs from requested execution")
+    return value | {"sha256": digest(value)}
 
 
 class VLLMBackend:
@@ -109,7 +192,11 @@ class VLLMBackend:
                 raise ValueError("Submission execution differs from its named fixed profile")
         if kind == "unmerged-lora" and not (submission or rehearsal):
             raise ValueError("Unmerged LoRA requires a named submission profile")
-        allowed_slots = tuple(range(1, 10)) if submission or rehearsal else ((2, 4, 8) if diagnostic else (1, 2))
+        self.admission = cfg["execution"].get("admission", "fixed")
+        if self.admission not in ("fixed", "kv_reservation") or (self.admission != "fixed" and not submission):
+            raise ValueError("Measured KV admission requires its named submission profile")
+        allowed_slots = (tuple(range(1, 65)) if self.admission == "kv_reservation" else
+                         tuple(range(1, 10)) if submission or rehearsal else ((2, 4, 8) if diagnostic else (1, 2)))
         if (cfg["execution"]["backend"] != "vllm"
                 or type(cfg["execution"]["batch_size"]) is not int
                 or cfg["execution"]["batch_size"] not in allowed_slots):
@@ -200,11 +287,21 @@ class VLLMBackend:
         if submission or rehearsal:
             self.capacity_receipt = allocated_kv_capacity(
                 self.llm.llm_engine, self.vllm_version, max_model_len=self.max_model_len,
-                slots=self.batch_size, safety_fraction=cfg["execution"].get("kv_safety_fraction", .90))
+                slots=self.batch_size, safety_fraction=cfg["execution"].get("kv_safety_fraction", .90),
+                **({"admission": self.admission} if self.admission != "fixed" else {}))
+        if self.admission == "kv_reservation":
+            receipt = self.capacity_receipt
+            assert receipt is not None
+            self.kv_admission_limits = dict(usable_tokens=receipt["usable_tokens"], block_size=receipt["block_size"],
+                                            slots=self.batch_size, max_new_tokens=cfg["generation"]["max_new_tokens"])
         if submission and not rehearsal:
-            from fine_tuning.error_note.v17_eval_engine import observe_engine
-            self.observed_execution = observe_engine(
-                self, "eager" if self.enforce_eager else "cuda_graph", self.batch_size)
+            mode = "eager" if self.enforce_eager else "cuda_graph"
+            if self.admission == "kv_reservation":
+                # v17 observe_engine is a pinned reference source fixed to 40,960-token full-context slots.
+                self.observed_execution = observe_reservation_engine(self, mode, self.batch_size, self.max_model_len)
+            else:
+                from fine_tuning.error_note.v17_eval_engine import observe_engine
+                self.observed_execution = observe_engine(self, mode, self.batch_size)
         self.engine_default_sampling_params = repr(self.llm.get_default_sampling_params())
         self.load_seconds = time.monotonic() - start
 
@@ -235,6 +332,7 @@ class VLLMBackend:
                 "enforce_eager": self.enforce_eager,
                 "limit_mm_per_prompt": {"image": self.max_images_per_prompt, "video": 0},
                 "allocated_kv": self.capacity_receipt,
+                **({"admission": KV_RESERVATION_RULE} if getattr(self, "admission", "fixed") != "fixed" else {}),
                 "observed_execution": self.observed_execution,
                 "rehearsal": self.rehearsal,
                 "timing_policy": "batch_wall_divided_by_size (legacy generate_batch); "
@@ -363,19 +461,30 @@ class VLLMBackend:
         seen: set[str] = set()
         exhausted = False
         engine = self.llm.llm_engine
+        limits = getattr(self, "kv_admission_limits", None)
+        admission = KVAdmission(**limits) if limits else None
+        self.last_admission = admission
+        held: tuple[dict[str, Any], dict[str, Any], dict[str, Any], Any] | None = None
 
         def fill_slots() -> None:
-            nonlocal exhausted
+            nonlocal exhausted, held
             while not exhausted and len(active) < self.batch_size:
-                try:
-                    request = next(iterator)
-                except StopIteration:
-                    exhausted = True
-                    return
+                if held is None:
+                    try:
+                        request = next(iterator)
+                    except StopIteration:
+                        exhausted = True
+                        return
+                    request_id = request["sample_id"]
+                    if not isinstance(request_id, str) or not request_id or request_id in seen:
+                        raise ValueError("Continuous vLLM requests require unique non-empty string sample_id values")
+                    held = (request, *self._prepare_request(request, final_only=True))
+                request, item, prompt, params = held
                 request_id = request["sample_id"]
-                if not isinstance(request_id, str) or not request_id or request_id in seen:
-                    raise ValueError("Continuous vLLM requests require unique non-empty string sample_id values")
-                item, prompt, params = self._prepare_request(request, final_only=True)
+                # The prepared head request waits for KV room; later requests never skip ahead of it.
+                if admission is not None and not admission.admit(request_id, item["input_tokens"]):
+                    return
+                held = None
                 enqueue_time = time.monotonic()
                 # Let vLLM use its wall-clock arrival timestamp; our latency clock is monotonic.
                 engine.add_request(request_id, prompt, params)
@@ -392,6 +501,8 @@ class VLLMBackend:
                 if deadline_check is not None:
                     deadline_check()
                 active_count = len(active)
+                if admission is not None:
+                    admission.observe_step()
                 step_start = time.monotonic()
                 outputs = engine.step()
                 step_share = (time.monotonic() - step_start) / active_count
@@ -411,6 +522,8 @@ class VLLMBackend:
                             request_latency_seconds=completed_at - state["enqueue_time"],
                         )
                         del active[request_id]
+                        if admission is not None:
+                            admission.release(request_id)
                         # Persist each valid completion before checking any later output.
                         yield row
                 fill_slots()

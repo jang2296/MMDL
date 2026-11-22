@@ -13,7 +13,7 @@ import yaml
 
 from mmdl.evaluation.parsers import score_with_parser
 from mmdl.runtime.artifacts import digest, read_json, resolve_image, sha256_file
-from mmdl.runtime.contracts import SUBJECTS, sample_seed
+from mmdl.runtime.contracts import SUBJECTS, SUITE_COUNTS, sample_seed
 
 
 class ViewerImages(HTMLParser):
@@ -48,17 +48,21 @@ def validate(run_dir, public_dir):
     inference_ids, invocation_ids, image_paths, checked_images = set(), set(), set(), set()
     pixel_identities = {}
     rows = [read_json(p) for p in sorted((run_dir / "samples").glob("*.json"))]
-    pro = identity.get("suite", "mmmu-val") == "mmmu-pro"
-    count = 1730 if pro else 900
+    suite = identity.get("suite", "mmmu-val")
+    pro, mapped = suite == "mmmu-pro", suite != "mmmu-val"
+    count = SUITE_COUNTS[suite]
     id_subjects = identity.get("id_subjects", {})
-    if pro:
+    if mapped:
         from mmdl.evaluation.datasets.mmmu_pro import subject_from_id
         assert set(id_subjects) == set(manifest["expected_ids"]), "Missing registered Pro subjects"
         assert all(subject_from_id(sid) == subject for sid, subject in id_subjects.items())
-    subject_counts = Counter(id_subjects.values()) if pro else Counter({subject: 30 for subject in SUBJECTS})
+    subject_counts = Counter(id_subjects.values()) if mapped else Counter({subject: 30 for subject in SUBJECTS})
     assert set(subject_counts) == set(SUBJECTS)
     if pro:
         assert all(50 <= n <= 60 for n in subject_counts.values())
+    if suite == "mmmu-test":
+        assert all(sid.startswith("test_") for sid in id_subjects), "Non-test ID in the test suite"
+        assert dict(subject_counts) == identity["subject_counts"], "Registered test subject sizes differ"
     assert summary["status"] == "COMPLETE", "Not a complete run"
     assert summary["mode"] == "full"
     assert summary["denominator"] == summary["expected_count"] == summary["completed_count"] == count
@@ -68,7 +72,7 @@ def validate(run_dir, public_dir):
     assert len(manifest["expected_ids"]) == count
     assert identity["ids_sha256"] == digest(manifest["expected_ids"])
     assert Counter(r["subject"] for r in rows) == subject_counts
-    if pro:
+    if mapped:
         assert identity["submission_order_sha256"] == digest(manifest["expected_ids"])
         assert identity["seed_order_sha256"] == digest([sample_seed(3407, sid) for sid in manifest["expected_ids"]])
     correct = 0
@@ -80,8 +84,10 @@ def validate(run_dir, public_dir):
         assert required <= row.keys(), "Required analysis field missing"
         assert row["_record_sha256"] == digest({k: v for k, v in row.items() if k != "_record_sha256"})
         assert row["status"] == "COMPLETED"
-        if pro:
+        if mapped:
             assert row["subject"] == id_subjects[row["id"]]
+            assert 1 <= len(row["images"]) <= 7
+        if pro:
             assert row["question_type"] == "multiple-choice"
             assert row["answer"] in [chr(65 + n) for n in range(len(row["options"]))]
             assert 1 <= len(row["images"]) <= 7

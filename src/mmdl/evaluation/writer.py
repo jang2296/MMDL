@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from mmdl.runtime.artifacts import atomic_text, digest, read_json, resolve_image, sha256_file, write_json
-from mmdl.runtime.contracts import SUBJECTS
+from mmdl.runtime.contracts import SUBJECTS, SUITE_COUNTS
 
 
 def _safe_id(sample_id: object) -> str:
@@ -223,15 +223,17 @@ def finalize(run_dir: Path, expected_ids: list[str], mode: str, *,
         raise ValueError("Finalization IDs/order differ from the registered run")
     identity = registration["identity"]
     suite = suite or identity.get("suite", "mmmu-val")
-    if suite not in {"mmmu-val", "mmmu-pro"}:
+    if suite not in SUITE_COUNTS:
         raise ValueError("Unknown evaluation suite")
     pro = suite == "mmmu-pro"
-    if pro:
+    mapped = suite != "mmmu-val"  # subjects come from the registered mapping; subject sizes differ
+    if mapped:
         from mmdl.evaluation.datasets.mmmu_pro import subject_from_id
         id_subjects = id_subjects if id_subjects is not None else identity.get("id_subjects")
         if not isinstance(id_subjects, dict) or set(id_subjects) != set(expected_ids):
             raise ValueError("Pro finalization requires the registered ID/subject mapping")
-        if any(subject_from_id(sid) != subject for sid, subject in id_subjects.items()):
+        if any(subject_from_id(sid) != subject or (suite == "mmmu-test" and not sid.startswith("test_"))
+               for sid, subject in id_subjects.items()):
             raise ValueError("Pro registered ID/subject mapping mismatch")
     id_subjects = id_subjects or {}
     records, failures, missing = _ordered_records(run_dir, expected_ids)
@@ -247,26 +249,26 @@ def finalize(run_dir: Path, expected_ids: list[str], mode: str, *,
     unresolved_failures = [failure for failure in failures if failure["id"] not in completed_ids]
     incomplete = bool(missing or unresolved_failures)
     status = "INCOMPLETE" if incomplete else ("COMPLETE" if full else mode.upper())
-    full_count = 1730 if pro else 900
+    full_count = SUITE_COUNTS[suite]
     denominator = full_count if full else len(expected)
     if full and len(expected) != full_count:
         raise ValueError(f"Full mode requires exactly {full_count} expected IDs")
     selected_totals: Counter[str] = Counter()
     for sample_id in expected:
-        subject = id_subjects[sample_id] if pro else _subject_from_id(sample_id)
+        subject = id_subjects[sample_id] if mapped else _subject_from_id(sample_id)
         if subject is not None:
             selected_totals[subject] += 1
     for subject, items in by_subject.items():
         if subject not in selected_totals:
             selected_totals[subject] = len(items)
-    if pro:
+    if mapped:
         for record in records:
             if record["subject"] != id_subjects[record["id"]]:
                 raise ValueError(f"Pro persisted ID/subject mapping mismatch: {record['id']}")
         if full and (set(selected_totals) != set(SUBJECTS)
-                     or any(not 50 <= selected_totals[subject] <= 60 for subject in SUBJECTS)):
+                     or (pro and any(not 50 <= selected_totals[subject] <= 60 for subject in SUBJECTS))):
             raise ValueError("Pro FULL requires 30 registered subjects and their actual source counts")
-    if full and not incomplete and not pro:
+    if full and not incomplete and not mapped:
         if set(selected_totals) != set(SUBJECTS) or any(selected_totals[subject] != 30 for subject in SUBJECTS):
             raise ValueError("Full mode requires 30 actual MMMU subjects with 30 samples each")
         for subject in SUBJECTS:
@@ -284,7 +286,7 @@ def finalize(run_dir: Path, expected_ids: list[str], mode: str, *,
     macro = None
     if full and not incomplete:
         macro = sum(item["accuracy"] for item in subject_scores) / 30
-        if not pro and not math.isclose(macro, correct / 900, rel_tol=0.0, abs_tol=1e-12):
+        if not mapped and not math.isclose(macro, correct / 900, rel_tol=0.0, abs_tol=1e-12):
             raise AssertionError("Full-run macro average differs from correct/900")
     summary = {
         "mode": mode,
@@ -302,7 +304,7 @@ def finalize(run_dir: Path, expected_ids: list[str], mode: str, *,
         "subject_scores": subject_scores,
         "subject_timing_policy": "sum of per-sample generation and preprocess/generate/score timers; excludes persistence and model loading",
     }
-    if pro:
+    if mapped:
         summary.update(suite=suite, parsed_count=sum(r["parse_status"] == "PARSED" for r in records),
                        no_parse_count=sum(r["parse_status"] != "PARSED" for r in records),
                        length_count=sum(r["finish_reason"] == "length" for r in records))

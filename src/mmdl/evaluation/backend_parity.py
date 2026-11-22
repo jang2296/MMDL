@@ -325,6 +325,13 @@ def validate_admission(path: Path, cfg: dict, hw: dict, model_path: Path, kind: 
                 or seven.get("production_reservation_seven_maximum", {}).get("status") != "CONTEXT_REJECTED_WITHOUT_TRUNCATION"
                 or seven.get("production_reservation_seven_maximum", {}).get("reserved_output_tokens") != 32768):
             raise ValueError("Seven-image, eight-rejection and actual KV evidence required")
+        if cfg["execution"].get("admission") == "kv_reservation":
+            # The registered context must hold seven maximum-pixel images plus the full output cap.
+            maximum = seven.get("seven_maximum_pixel_context", {})
+            if (maximum.get("status") != "CONTEXT_ACCEPTED" or seven.get("kv", {}).get("admission") != "kv_reservation"
+                    or maximum.get("input_tokens", 1 << 30) + cfg["generation"]["max_new_tokens"]
+                    > cfg["execution"]["max_model_len"]):
+                raise ValueError("Measured-admission profile requires the seven maximum-pixel context to fit")
     return {"path": str(path.resolve()), "sha256": sha256_file(path),
             "content_sha256": claimed, "pass": True}
 
@@ -407,7 +414,7 @@ def run_probe(args: argparse.Namespace) -> dict:
     if args.model_ref:
         from fine_tuning.notebook_rl.export import validate_export_reference
         validate_export_reference(args.model_path, read_json(args.model_ref))
-    backend = None
+    backend: Any = None
     result = dict(version="submission-engine-probe-v1", engine=args.engine, reportable=False,
                   rehearsal=args.rehearsal, reference_source=source, candidate_sources=candidate_sources(),
                   config=cfg, hardware=hw, model_kind=kind, runtime=runtime_fingerprint(),
@@ -443,9 +450,14 @@ def run_probe(args: argparse.Namespace) -> dict:
                                              str(args.base_path) if args.base_path else None)
         result["backend"] = backend.describe()
         if not args.rehearsal:
-            result["observed_engine"] = old.observe_engine(
-                backend, "eager" if cfg["execution"].get("enforce_eager", True) else "cuda_graph",
-                cfg["execution"]["batch_size"])
+            mode = "eager" if cfg["execution"].get("enforce_eager", True) else "cuda_graph"
+            if cfg["execution"].get("admission") == "kv_reservation":
+                # The pinned v17 observer is fixed to 40,960-token full-context slots.
+                from mmdl.evaluation.backends.vllm_backend import observe_reservation_engine
+                result["observed_engine"] = observe_reservation_engine(
+                    backend, mode, cfg["execution"]["batch_size"], cfg["execution"]["max_model_len"])
+            else:
+                result["observed_engine"] = old.observe_engine(backend, mode, cfg["execution"]["batch_size"])
         result["probabilities"] = probability_rows(backend)
         if args.model_ref:
             result["vision_pf5"] = direct_pf5(backend, args.model_path)

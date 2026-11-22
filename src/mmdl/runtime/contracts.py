@@ -63,6 +63,30 @@ for _protocol, (_suite, _slots, _images, _hardware) in SUBMISSION_PROFILES.items
         "gpu_memory_utilization": 0.90, "kv_safety_fraction": 0.90,
         "logprobs_mode": "raw_logprobs",
     }
+# MMMU test (10,500): its own frozen profile, registered after the loop so earlier entries stay unchanged.
+# Low-resolution images, a 2,048-token cap and measured-KV admission instead of fixed full-context slots.
+MMMU_TEST_PROFILE = "mmmu-test-lowres2k-v8-v1"
+TEST_ANSWER_SOURCE = dict(
+    url="https://raw.githubusercontent.com/MMMU-Benchmark/MMMU/"
+        "bc168a9119d986d7cdf1e07b1eeb96ed3e8f92fa/mmmu/answer_dict_test.json",
+    sha256="45b639a937017d3d71f81f610df3a1471debe1887c5c1d24644fec1b33059d5c",
+    commit="bc168a9119d986d7cdf1e07b1eeb96ed3e8f92fa")
+SUBMISSION_PROFILES[MMMU_TEST_PROFILE] = ("mmmu-test", 64, 7, "any")
+CONTROL_IMAGES[MMMU_TEST_PROFILE] = dict(CONTROL_IMAGES["mmmu-val-control-b-v2"])
+EXECUTION_PROFILES[MMMU_TEST_PROFILE] = dict(EXECUTION_PROFILES["mmmu-pro-standard10-v8-a100-v1"]) | {
+    "batch_size": 64, "max_model_len": 16384, "admission": "kv_reservation"}
+PROFILE_MAX_NEW_TOKENS = {MMMU_TEST_PROFILE: 2048}
+SUITE_COUNTS = {"mmmu-val": 900, "mmmu-pro": 1730, "mmmu-test": 10500}
+SUITE_DATA_DIRS = {"mmmu-val": "evaluation/mmmu", "mmmu-pro": "evaluation/mmmu_pro",
+                   "mmmu-test": "evaluation/mmmu_test"}
+
+
+def suite_of(cfg):
+    """The evaluation suite a protocol config names (dataset id + split)."""
+    dataset = cfg.get("dataset", {})
+    if dataset.get("id") == PRO_ID:
+        return "mmmu-pro"
+    return "mmmu-test" if dataset.get("split") == "test" else "mmmu-val"
 
 
 def validate_profile_model(cfg, kind):
@@ -101,6 +125,9 @@ def validate_configs(cfg, hw):
     dataset = (dict(id=PRO_ID, revision=PRO_REVISION, config="standard (10 options)",
                     split="test", subjects=SUBJECTS, expected_total=1730)
                if profile and profile[0] == "mmmu-pro" else
+               dict(id=DATA_ID, revision=DATA_REVISION, split="test", subjects=SUBJECTS,
+                    expected_total=10500, answer_source=TEST_ANSWER_SOURCE)
+               if profile and profile[0] == "mmmu-test" else
                dict(id=DATA_ID, revision=DATA_REVISION, split="validation",
                     subjects=SUBJECTS, expected_total=900, per_subject=30))
     if cfg["dataset"] != dataset:
@@ -122,7 +149,8 @@ def validate_configs(cfg, hw):
         raise ValueError("Invalid generation budget")
     image = cfg["image"]
     if cfg["protocol_id"] in CONTROL_IMAGES:
-        if image != CONTROL_IMAGES[cfg["protocol_id"]] or cfg["generation"]["max_new_tokens"] != 32768:
+        if (image != CONTROL_IMAGES[cfg["protocol_id"]]
+                or cfg["generation"]["max_new_tokens"] != PROFILE_MAX_NEW_TOKENS.get(cfg["protocol_id"], 32768)):
             raise ValueError("Controlled image protocol and output budget are fixed")
     elif set(image) != {"min_pixels", "max_pixels", "resize_owner"} or image["resize_owner"] != "official_processor":
         raise ValueError("Only the official processor may resize images")

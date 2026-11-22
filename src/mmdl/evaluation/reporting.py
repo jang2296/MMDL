@@ -11,10 +11,7 @@ from typing import Any
 import yaml
 
 from mmdl.runtime.artifacts import digest, read_json, sha256_file, write_json
-from mmdl.runtime.contracts import SUBJECTS
-
-
-SUITE_COUNTS = {"mmmu-val": 900, "mmmu-pro": 1730}
+from mmdl.runtime.contracts import SUBJECTS, SUITE_COUNTS, suite_of
 
 
 def saved_run(source: Path, suite: str, *, preview: bool = False) -> tuple[list[dict], dict]:
@@ -26,8 +23,7 @@ def saved_run(source: Path, suite: str, *, preview: bool = False) -> tuple[list[
     if not expected or len(set(expected)) != len(expected):
         raise ValueError("Source registration has empty or duplicate IDs")
     config = yaml.safe_load((source / "resolved_eval_config.yaml").read_text(encoding="utf-8"))
-    registered_suite = identity.get("suite") or (
-        "mmmu-pro" if config.get("dataset", {}).get("id") == "MMMU/MMMU_Pro" else "mmmu-val")
+    registered_suite = identity.get("suite") or suite_of(config)
     if registered_suite != suite:
         raise ValueError("Requested suite differs from the source registration")
     rehearsal = bool(identity.get("rehearsal") or config.get("rehearsal"))
@@ -39,7 +35,7 @@ def saved_run(source: Path, suite: str, *, preview: bool = False) -> tuple[list[
         }:
             raise ValueError("MMMU registration differs from the fixed validation IDs")
     mapping = identity.get("id_subjects")
-    if suite == "mmmu-pro" and not isinstance(mapping, dict):
+    if suite != "mmmu-val" and not isinstance(mapping, dict):
         coverage_path = source / "dataset_coverage.json"
         if coverage_path.exists():
             mapping = read_json(coverage_path).get("id_subjects")
@@ -62,6 +58,8 @@ def saved_run(source: Path, suite: str, *, preview: bool = False) -> tuple[list[
             raise ValueError(f"Registered subject differs: {sample_id}")
         if suite == "mmmu-val" and not rehearsal and not sample_id.startswith(f"validation_{row['subject']}_"):
             raise ValueError(f"MMMU subject differs from its ID: {sample_id}")
+        if suite == "mmmu-test" and not sample_id.startswith(f"test_{row['subject']}_"):
+            raise ValueError(f"MMMU test subject differs from its ID: {sample_id}")
         indexed[sample_id] = row
     if not preview:
         summary = read_json(source / "summary.json")
