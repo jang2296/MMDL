@@ -1,154 +1,97 @@
 # Team 2 · Qwen3-VL-4B-Instruct 평가와 파인튜닝
 
-일반 MMMU validation의 원본은 V8 **558/900 (62.00%)**, V8와 CompassVerifier-7B를 함께 쓰면 **566/900 (62.89%)**입니다. 최종 v18b(slot 206)는 같은 두 기준에서 **573/900 (63.67%)**, **591/900 (65.67%)**입니다. 아래 보고서에서 기존 체크포인트 복원, 원본부터 재학습, MMMU와 MMMU-Pro의 모델별 평가 명령을 확인할 수 있습니다. [v18b 재현 및 평가 안내](reports/finetune_v18b.md)
+수업 지정 모델 Qwen3-VL-4B-Instruct를 MMMU validation으로 평가하고(Assignment #1), 같은 모델이 스스로 푼 풀이와 자기 교정으로 추가 학습한 최종 모델(v18b)을 MMMU validation, MMMU-Pro, MMMU test로 평가했습니다.
 
-## 기존 Assignment #1
+## 최종 결과
 
+| 시험 | 문항 | 원본 · V8 | 원본 · V8+판정 | 최종 · V8 | 최종 · V8+판정 |
+|---|---:|---:|---:|---:|---:|
+| MMMU validation | 900 | 558 (62.00%) | 566 (62.89%) | **573 (63.67%)** | **591 (65.67%)** |
+| MMMU-Pro Standard 10-way | 1,730 | 905 (52.31%) | 926 (53.53%) | **932 (53.87%)** | **953 (55.09%)** |
+| MMMU test | 10,500 | 측정 안 함 | 측정 안 함 | **5,232 (49.83%)** | **5,380 (51.24%)** |
 
-Qwen3-VL-4B-Instruct의 MMMU validation **900문항 평가 파이프라인**입니다.
-현재 기준은 `team-final-answer-v8`입니다. 공식 점수에 맞춰 답을 고르지 않으며,
-이후 학습 모델도 같은 프롬프트·생성·이미지·채점 조건으로 비교합니다.
+- **V8**: 과제 기준 점수입니다. 규칙 기반 최종답 파서(`team-final-answer-v8`)로 채점합니다.
+- **V8+판정**: 같은 답안의 보조 점수입니다. V8 오답 중 정상 종료했지만 답을 읽지 못했거나 주관식 표기가 달랐던 답안만 CompassVerifier-7B로 다시 판정해, 같은 답일 확률이 0.90 이상이면 정답으로 인정했습니다. 정답을 오답으로 바꾸지는 않습니다.
+- 모든 점수는 문항마다 답을 한 번 생성한 결과입니다(기준 seed 3407).
+- MMMU validation과 MMMU-Pro는 출력 32,768토큰, 이미지 1,003,520~4,014,080픽셀로 원본과 최종 모델을 같은 조건에서 평가했습니다. MMMU test는 비용 때문에 출력 2,048토큰, 이미지 262,144~1,310,720픽셀로 최종 모델만 평가했으므로 위 두 시험과 직접 비교하지 않습니다.
+- 원본 MMMU validation 558/900은 Assignment #1의 제출 baseline입니다.
 
-- **Assignment #1 보고서:** [reports/mmmu_baseline.md](reports/mmmu_baseline.md)
-- **제출 형식·기한:** 제공된 `SUBMISSION_TEMPLATE.md`의8개 항목, 2026-09-28 23:59(과제 안내 기준)
-- **강의 PDF의 안내 경로:** [assignment/assignment1.md](assignment/assignment1.md) → 위 보고서 링크
-- **확정 결과:** [점수·검증 요약](results/scoring-v8-20260924/summary.json), [30과목 × 세 실행 표](results/scoring-v8-20260924/subject_scores.csv)
+## 학습 방법
 
-| 저장된 추론 실행 | V8 CPU 재채점 |
-|---|---:|
-| 2,048토큰 | 478/900 · 53.11% |
-| 이전 32,768토큰 | 554/900 · 61.56% |
-| 고해상도 32,768토큰 — 제출 baseline | 558/900 · 62.00% |
+추가 학습에는 같은 Qwen3-VL-4B-Instruct만 사용했고, 더 큰 모델의 풀이는 쓰지 않았습니다.
 
-새 GPU 추론이나 fine-tuning 점수가 아닙니다. 원래 RTX3090 실행의 응답은 보존했고
-V8으로만 재채점했습니다. 공식 비교값67.4%와의 격차, 구현 출처와 한계는 보고서에 있습니다.
-이 절의 실측 장비는 RTX 3090입니다. 후속 학습과 A100 평가 결과는 위 v18b 보고서에 수록했습니다.
+1. 학습 문제를 정답 없이 한 번 풀고, 정답 여부를 보상으로 강화학습합니다.
+2. 맞힌 풀이 중 품질 검사를 통과한 풀이를 지도학습합니다.
+3. 틀린 문제는 정답을 보고 오답노트를 쓰게 하고, 노트에서 고친 값이 원래 자료와 맞을 때만 그 부분을 지도학습합니다.
+4. 정답을 가리고 노트의 교훈만 준 채 다시 풀어 맞히면, 그 풀이를 원래 질문의 답으로 지도학습합니다.
+5. 원본 모델에서 너무 멀어지지 않도록 KL 항을 함께 둡니다.
 
-## 1. 환경과 저장 위치
+- 학습 자료는 공개 데이터셋 15종에서 고른 3,000문항입니다(본학습 전 준비 학습은 별도 512문항). MMMU와 MMMU-Pro는 학습에 쓰지 않았습니다.
+- 본학습은 16문항마다 가중치를 갱신했고, A100 80GB 한 대에서 약 6시간 14분 걸렸습니다.
+- 평가할 때는 오답노트나 정답 없이 문항마다 한 번만 답합니다.
 
-Linux/WSL, Python3.12, NVIDIA CUDA 사용 가능 환경이 필요합니다.
-권장 경로는 RTX4090/3090 24GB의 vLLM·BF16·동시2 연속 처리입니다.
-가중치·MMMU 원문·이미지·대형 응답은 Git 저장소 밖에 저장합니다.
-다음 명령들은 저장소 루트에서 실행합니다. 처음 받는 경우:
+## 학습한 부분
+
+언어 모델과 시각 인코더의 원래 가중치는 고정하고, 아래 부분만 학습했습니다.
+
+| 부분 | 대상 | 방식 | 학습률 | 파라미터 |
+|---|---|---|---:|---:|
+| 언어 모델 | 선형층 252곳 | LoRA (rank 16, α 32) | 5×10⁻⁵ | 33,030,144 |
+| 시각 인코더 | 선형층 48곳 | LoRA (rank 16, α 32) | 1×10⁻⁵ | 2,359,296 |
+| 기본 Merger | `visual.merger` | 전체 가중치 | 1×10⁻⁵ | 27,271,680 |
+| DeepStack Merger ×3 | `visual.deepstack_merger_list.{0,1,2}` | 전체 가중치 | 1×10⁻⁵ | 81,833,472 (각 27,277,824) |
+| **합계** | | | | **144,494,592** (전체 약 44억 개의 약 3.3%) |
+
+- **기본 Merger**: 시각 인코더 마지막 층의 특징을 이웃한 2×2 조각씩 묶어(1024×4 = 4096차원) 언어 모델의 입력 차원(2560)으로 바꾸는 연결부입니다. 구조는 LayerNorm(1024) → Linear(4096→4096) → GELU → Linear(4096→2560)입니다.
+- **DeepStack Merger**: Qwen3-VL의 DeepStack 구조에 있는 연결부 3개로, 시각 인코더 5·11·17번째 층의 특징을 같은 방식으로 바꿔 언어 모델 처음 세 층의 이미지 토큰 위치에 더합니다. 구조는 LayerNorm(4096) → Linear(4096→4096) → GELU → Linear(4096→2560)입니다.
+- 네 Merger의 크기는 원래 모델 구조 그대로입니다(`config.json`의 `deepstack_visual_indexes: [5, 11, 17]`). LoRA 없이 전체 가중치를 학습했기 때문에 학습 파라미터의 대부분을 차지합니다.
+
+## 실행과 재현
 
 ```bash
 git clone --branch feat/mmmu-baseline https://github.com/jang2296/MMDL.git
 cd MMDL
-git rev-parse HEAD
-```
-
-정확한 제출 버전을 재현할 때는 제출 기록의 전체 commit SHA로 `git checkout <commit-sha>`한 뒤
-진행합니다. 이후 환경을 설치합니다.
-
-```bash
-python3.12 -m venv "$HOME/mmdl-env"
-source "$HOME/mmdl-env/bin/activate"
+python3.12 -m venv "$HOME/mmdl-env" && source "$HOME/mmdl-env/bin/activate"
 pip install -r env/requirements-vllm.lock
 pip install --no-deps -e .
 export HF_HOME="$HOME/mmdl-cache/huggingface"
 export MMDL_DATA_ROOT="$HOME/mmdl-data"
 export MMDL_ARTIFACT_ROOT="$HOME/mmdl-artifacts"
-export CUDA_VISIBLE_DEVICES=0
 export MMDL_JOB_ID=baseline-v8
-bash scripts/test_reference.sh
 ```
 
-vLLM lock은 실제 추론 환경에 검사 도구(Ruff/mypy 및 의존 패키지)의 고정 버전을 추가한 것이다.
-원본 실행 당시 환경은 별도 `environment.json` 기록과 구분한다.
-
-`--model-path`는 아래 공식 ID 또는 동일 revision의 로컬 snapshot을 받습니다.
-기본 데이터 경로가 비어 있으면 평가 명령이 모델·데이터를 준비합니다. 데이터 `manifest.json`만
-있고 모델 cache가 없는 사용자 경로라면, 평가 전에 다음 명령으로 모델과 데이터 manifest를 맞춥니다.
-
-```bash
-python -m mmdl.data.download --data-root "$MMDL_DATA_ROOT" --cache "$HF_HOME" --artifact-root "$MMDL_ARTIFACT_ROOT" --skip-pro
-```
-
-이 명령은 고정 revision을 취득·검증하고 MMMU-Pro 취득은 건너뜁니다. 위 준비 명령의
-`--data-root`는 데이터 저장 루트이고, 아래 평가 명령의 `--data-root`는 그 아래
-`evaluation/mmmu`입니다. 평가에 별도 데이터 경로를 지정한다면 그곳에 준비된
-`manifest.json`과 30개 validation parquet가 있어야 합니다.
-고정 revision·파일 hash·BF16을 검사하며, OOM이라고 모델/해상도/길이를 자동 변경하지 않습니다.
-
-| 대상 | 고정 revision | 현재 용도 |
-|---|---|---|
-| `Qwen/Qwen3-VL-4B-Instruct` | `ebb281ec70b05090aa6165b016eac8ec08e71b17` | BF16·비양자화; processor/tokenizer도 동일 revision |
-| `MMMU/MMMU` | `98e6ac0cb9b7b2cd2c991b85a50762edc4aedc68` | validation 30과목 × 30문항 = 900 평가 |
-| `MMMU/MMMU_Pro` | `563f3e84bb3b90893083a1f039cfa13077f2302b` | Standard 10-way 다운로드·hash 확인만; 평가하지 않음 |
-
-앞의 두 revision은 Assignment #1 지정값이다. MMMU-Pro는 별도 저장소이며 그 revision은
-팀이 취득한 버전을 고정한 값이지 과제의 MMMU revision을 재사용한 것이 아니다.
-준비 단계는 모델·데이터를 Hugging Face에서 취득하거나 동일 revision의 캐시를 검증해 재사용한다.
-GitHub 웹에서 실행 버튼을 누르는 방식이 아니라, GPU 환경에서 저장소를 clone한 뒤 아래 Bash 명령을 실행한다.
-
-## 2. 900문항 평가 — 한 명령
-
-깨끗한 Git checkout에서 실행합니다. 아래 명령은 실제 GPU 추론을 시작합니다.
-3090에서는 hardware 파일만 `configs/hardware/rtx3090_24gb.yaml`로 바꿉니다.
+원본 모델의 MMMU validation 900문항 평가(Assignment #1)는 아래 한 명령으로 모델·데이터 준비, 추론, V8 채점, 결과 저장까지 수행합니다. RTX 3090에서는 hardware 파일만 `configs/hardware/rtx3090_24gb.yaml`로 바꿉니다.
 
 ```bash
 bash scripts/eval.sh --protocol configs/eval/mmmu_val_v8.yaml --hardware configs/hardware/rtx4090_24gb.yaml --model-ref manifests/models/baseline.json --model-path Qwen/Qwen3-VL-4B-Instruct --data-root "$MMDL_DATA_ROOT/evaluation/mmmu" --artifact-root "$MMDL_ARTIFACT_ROOT" --public-root "$MMDL_ARTIFACT_ROOT/public" --job-id "$MMDL_JOB_ID" --run-role evaluation --require-commit "$(git rev-parse HEAD)" --run-id "${MMDL_JOB_ID}-evaluation" --mode full
 ```
 
-보고서의 프롬프트, 출력32768, sampling0.7/0.8/20·presence1.5, 이미지1003520–4014080,
-context40960을 고정합니다.
-CLI의 기본 설정과 현재 제출용 진입점은 **`configs/eval/mmmu_val_v8.yaml`**입니다.
-다른 `configs/eval/` YAML은 이전 실행이나 회귀 확인용 설정입니다.
+- **Assignment #1 보고서**(평가 조건, 저장 응답 재채점, 공식 비교값과의 차이): [reports/mmmu_baseline.md](reports/mmmu_baseline.md)
+- **최종 모델(v18b) 재현**(체크포인트 복원, 원본부터 재학습, MMMU validation·MMMU-Pro·MMMU test 평가 명령): [reports/finetune_v18b.md](reports/finetune_v18b.md)
+- 최종 체크포인트는 학습 자료의 이용 조건 때문에 공개 저장소에 올리지 않았습니다. 제공 범위는 v18b 보고서에 적었습니다.
 
-위 명령은 환경 설치 후 모델·데이터 준비 → 900문항 추론 → V8 채점 → 결과 저장을 수행합니다.
-`scripts/reproduce.sh`는 별도의 RunPod 운영용 wrapper이며, persistent volume·예산/종료 정책
-등 추가 환경 설정을 검사하는 경로입니다. 위 직접 평가 명령에는 그 운영용 설정이 필요하지 않습니다.
+| 고정 버전 | revision |
+|---|---|
+| `Qwen/Qwen3-VL-4B-Instruct` | `ebb281ec70b05090aa6165b016eac8ec08e71b17` (BF16, 비양자화) |
+| `MMMU/MMMU` | `98e6ac0cb9b7b2cd2c991b85a50762edc4aedc68` |
+| `MMMU/MMMU_Pro` (Standard 10-way) | `563f3e84bb3b90893083a1f039cfa13077f2302b` |
 
-현재 공개 범위는 평가·저장 응답 재채점입니다. 학습과 데이터 증강은 구현·실행하지 않았습니다.
-향후 학습 checkpoint 평가에는 `--model-ref`와 `--model-path`를 바꾸고,
-`full/merged/adapter`의 base revision·학습 설정·데이터 hash·artifact 출처를 제공해야 합니다.
-
-## 3. 결과 확인·CPU 재채점·보고서
-
-`$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation/`에 원문 JSONL, 샘플 JSON,
-과목별 점수/시간 CSV, 환경·설정·입력/소스 hash와 `review.html`이 저장됩니다.
-공유 이미지는 외부 `assets/images/`에 있습니다. 시스템 오류/누락은 `INCOMPLETE`이며,
-빈 답/추출 실패는 전체900 분모에 포함합니다.
-
-```bash
-export NEW_RESCORE_DIR="$MMDL_ARTIFACT_ROOT/rescores/${MMDL_JOB_ID}-v8"
-bash scripts/rescore.sh --artifact-root "$MMDL_ARTIFACT_ROOT" --run-id "${MMDL_JOB_ID}-evaluation" --parser team-final-answer-v8 --output-dir "$NEW_RESCORE_DIR"
-python -m scripts.validate_rescore --source-run "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" --scored-dir "$NEW_RESCORE_DIR"
-python -m scripts.report_baseline --run-dir "$MMDL_ARTIFACT_ROOT/runs/${MMDL_JOB_ID}-evaluation" --scored-dir "$NEW_RESCORE_DIR" --output reports/mmmu_baseline.md
-```
-
-재채점은 GPU/LLM 없이 수행하며 기존 결과 폴더를 덮어쓰지 않습니다.
-보고서 생성은 원본 GPU 실측과 새 CPU 점수를 분리하여 `reports/mmmu_baseline.md`만 갱신합니다.
-보고서는 제공된 `SUBMISSION_TEMPLATE.md`의8개 항목을 따라 작성했으며, 루트에 중복 본문을 만들지 않습니다.
-원본 응답을 배포하지 않아도 위 평가 명령으로 데이터를 정식 취득해 새 실행할 수 있습니다.
-기존 응답의 완전 동일 재채점에는 별도 보존 원장이 필요하며 이 저장소에 포함되지 않습니다.
-
-## 4. 저장소 범위와 디렉터리
+## 저장소 구성
 
 ```text
 MMDL/
-├── README.md         설치·평가·결과 확인 안내
-├── pyproject.toml    Python 패키지 설치 정보
-├── .env.example      외부 저장 경로·운영 환경변수 예시
-├── .gitignore        대용량·비공개 파일 제외
-├── assignment/       과제 지정 경로의 보고서 링크
-├── configs/
-│   ├── eval/         현재 기본은 mmmu_val_v8.yaml; 나머지는 이전 실행·회귀용
-│   └── hardware/     GPU별 실행 자원 프로필
-├── env/              고정된 평가·vLLM 의존성 lock
-├── manifests/        모델·데이터 revision과 파일 hash
-├── prompts/          평가 프롬프트 템플릿
-├── reports/          제출 baseline 보고서
-├── results/          작은 공개 점수·검증 요약
-├── scripts/          평가·재채점·검증 진입점
-├── src/mmdl/
-│   ├── data/          고정 모델·데이터 취득
-│   ├── evaluation/    MMMU 데이터, 프롬프트, backend, 채점, 결과 저장
-│   └── runtime/       계약·환경·artifact·재현 지원
-├── tests/unit/        CPU 회귀 검사
-└── third_party/       출처가 고정된 evaluator·참고 코드와 license
+├── assignment/   과제 지정 경로의 보고서 링크
+├── configs/      평가 설정(eval), GPU 자원 프로필(hardware), 학습 설정(train)
+├── env/          고정 의존성 lock
+├── fine_tuning/  v18b 학습 코드
+├── manifests/    모델·데이터 revision과 파일 hash
+├── prompts/      평가 프롬프트
+├── reports/      Assignment #1 보고서와 v18b 재현 보고서
+├── results/      작은 공개 점수 집계
+├── scripts/      평가·학습·복원·재채점 진입점
+├── src/mmdl/     데이터 취득, 평가, 채점(V8·CompassVerifier), 실행 지원
+├── tests/unit/   CPU 회귀 검사
+└── third_party/  출처를 고정한 평가·참고 코드와 license
 ```
 
-결과 원문, 개별 응답, 이미지와 HTML 열람본은 `MMDL_ARTIFACT_ROOT` 아래에 저장하며
-GitHub에는 작은 확정 집계만 포함합니다. 내부 에이전트 지침, 개발 대화/감사 폴더,
-강의 PDF, 모델·데이터 원문은 공개하지 않습니다.
+가중치, MMMU 원문과 이미지, 개별 응답은 이 저장소에 포함하지 않습니다.
